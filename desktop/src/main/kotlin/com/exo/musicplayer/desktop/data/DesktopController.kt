@@ -3959,7 +3959,7 @@ class DesktopController(parent: CoroutineScope) {
             archiveNote = null
             selectionNote = buildString {
                 if (removed.isNotEmpty()) {
-                    append("Moved ${removed.size} file${if (removed.size == 1) "" else "s"} to the Recycle Bin.")
+                    append("Moved ${removed.size} file${if (removed.size == 1) "" else "s"} to the ${Platform.trashName}.")
                 }
                 if (failed.isNotEmpty()) {
                     if (isNotEmpty()) append(" ")

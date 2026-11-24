@@ -57,6 +57,7 @@ import com.exo.musicplayer.desktop.data.FIX_LABEL
 import com.exo.musicplayer.desktop.library.DesktopTrack
 import com.exo.musicplayer.util.asDuration
 import java.util.Locale
+import com.exo.musicplayer.desktop.system.Platform
 
 /** Which modal is open, if any. */
 enum class DialogKind { BULK, DUPLICATES, ADD_TO_PLAYLIST, MERGE }
@@ -561,7 +562,7 @@ fun DuplicatesDialog(controller: DesktopController, onDismiss: () -> Unit) {
                 Spacer(Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "${selected.sumOf { it.remove.size }} files will go to the Recycle Bin",
+                        "${selected.sumOf { it.remove.size }} files will go to the ${Platform.trashName}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Palette.TextDim,
                         modifier = Modifier.weight(1f)

@@ -67,6 +67,7 @@ import com.exo.musicplayer.desktop.system.Explorer
 import com.exo.musicplayer.util.asDuration
 import java.io.File
 import java.util.Locale
+import com.exo.musicplayer.desktop.system.Platform
 
 @Composable
 internal fun LibraryPane(
@@ -273,9 +274,9 @@ private fun TrackRow(
                 ContextMenuItem("Rate ★★") { controller.setRating(track, 2) },
                 ContextMenuItem("Rate ★") { controller.setRating(track, 1) },
                 ContextMenuItem("Clear rating") { controller.setRating(track, 0) },
-                ContextMenuItem("Show in Explorer") { revealInExplorer(track.file) }
+                ContextMenuItem(Platform.showInFolder) { revealInExplorer(track.file) }
             ) + revertItems(controller, track) + listOf(
-                ContextMenuItem("Delete (move to Recycle Bin)") {
+                ContextMenuItem("Delete (move to ${Platform.trashName})") {
                     controller.deleteTracks(listOf(track))
                 }
             )
@@ -380,7 +381,7 @@ private fun TrackRow(
                     ) {
                         Icon(
                             Icons.Default.DeleteOutline,
-                            "Move to Recycle Bin",
+                            "Move to ${Platform.trashName}",
                             Modifier.size(14.dp),
                             tint = Palette.TextFaint
                         )
@@ -485,7 +486,7 @@ private fun SelectionBar(controller: DesktopController, visible: List<DesktopTra
                 controller.revertToOriginal(controller.selectedTracks(visible))
             }
             Spacer(Modifier.width(6.dp))
-            GhostButton("Show in Explorer", icon = Icons.Default.FolderOpen) {
+            GhostButton(Platform.showInFolder, icon = Icons.Default.FolderOpen) {
                 controller.revealSelection(visible)
             }
             Spacer(Modifier.width(6.dp))
