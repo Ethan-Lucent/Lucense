@@ -416,7 +416,7 @@ class DesktopController(parent: CoroutineScope) {
             SortMode.LISTEN_TIME -> filtered.sortedByDescending {
                 listenTimes[it.file.absolutePath] ?: 0L
             }
-            SortMode.ADDED -> filtered.sortedByDescending { it.file.lastModified() }
+            SortMode.ADDED -> filtered.newestFirst()
             SortMode.RATING -> filtered.sortedWith(
                 compareByDescending<DesktopTrack> { ratings[it.file.absolutePath] ?: 0 }
                     .thenBy { it.title.lowercase() }
@@ -508,7 +508,9 @@ class DesktopController(parent: CoroutineScope) {
         plays = playCounts[track.file.absolutePath] ?: 0,
         rating = ratings[track.file.absolutePath] ?: 0,
         year = track.year,
-        addedAt = track.file.lastModified(),
+        // Asked of the disk only when the rule has an added: term. This runs for
+        // every song on every keystroke in the search box, on the UI thread.
+        addedAt = if (query.addedWithinDays != null) track.file.lastModified() else 0L,
         genre = track.genre
     )
 
@@ -969,7 +971,7 @@ class DesktopController(parent: CoroutineScope) {
      * most of the library, which is a queue nobody asked for.
      */
     fun autoPlaylist(kind: AutoPlaylist): List<DesktopTrack> = when (kind) {
-        AutoPlaylist.RECENT -> tracks.sortedByDescending { it.file.lastModified() }.take(60)
+        AutoPlaylist.RECENT -> tracks.newestFirst().take(60)
         AutoPlaylist.MOST_PLAYED -> tracks
             .filter { (playCounts[it.file.absolutePath] ?: 0) > 0 }
             .sortedByDescending { playCounts[it.file.absolutePath] ?: 0 }
@@ -4587,6 +4589,15 @@ private const val RESTART_WINDOW_MS = 4_000L
 private val PLAYABLE = setOf(
     "mp3", "m4a", "mp4", "m4b", "flac", "wav", "ogg", "oga", "opus", "aac", "wma", "aiff", "aif"
 )
+
+/**
+ * Newest file first, each file asked its date once. Sorted by
+ * `sortedByDescending { it.file.lastModified() }`, the disk was asked twice per
+ * comparison - for 5,000 songs, some 130,000 times per sort, on the UI thread.
+ * Stable, as that was, so songs from the same moment keep their order.
+ */
+private fun List<DesktopTrack>.newestFirst(): List<DesktopTrack> =
+    map { it to it.file.lastModified() }.sortedByDescending { it.second }.map { it.first }
 
 /** What to send a catalogue when looking a track up. */
 private val DesktopTrack.searchQuery: String
