@@ -7,6 +7,8 @@ import java.sql.DriverManager
 import java.sql.PreparedStatement
 import org.sqlite.SQLiteConnection
 import java.util.Calendar
+import com.exo.musicplayer.desktop.library.DesktopTrack
+import com.exo.musicplayer.desktop.library.FolderLibrary
 
 data class StoredLyrics(
     val plain: String?,
@@ -71,6 +73,21 @@ class DesktopStore(databaseFile: File) {
                 """.trimIndent()
             )
             st.executeUpdate("CREATE INDEX IF NOT EXISTS ix_events_path ON play_events(path)")
+            // What the last scan read from each file, so the next one only reads
+            // what changed; see FolderLibrary.scan. isTrack 0 is a file that
+            // turned out not to be a song.
+            st.executeUpdate(
+                """
+                CREATE TABLE IF NOT EXISTS library_cache (
+                    path TEXT PRIMARY KEY,
+                    size INTEGER NOT NULL,
+                    modified INTEGER NOT NULL,
+                    isTrack INTEGER NOT NULL,
+                    title TEXT, artist TEXT, album TEXT, durationMs INTEGER,
+                    trackNumber INTEGER, year INTEGER, albumArtist TEXT, genre TEXT
+                )
+                """.trimIndent()
+            )
             st.executeUpdate(
                 """
                 CREATE TABLE IF NOT EXISTS smart_playlists (
@@ -739,6 +756,76 @@ class DesktopStore(databaseFile: File) {
             connection.prepareStatement("DELETE FROM $table WHERE path = ?").use { ps ->
                 for (path in paths) { ps.setString(1, path); ps.addBatch() }
                 ps.executeBatch()
+            }
+        }
+    }
+
+    /** What the last scan read, by path; see FolderLibrary.scan. */
+    fun libraryCache(): Map<String, FolderLibrary.Cached> = buildMap {
+        connection.createStatement().use { st ->
+            st.executeQuery(
+                "SELECT path, size, modified, isTrack, title, artist, album, durationMs, trackNumber, year, albumArtist, genre " +
+                    "FROM library_cache"
+            ).use { rs ->
+                while (rs.next()) {
+                    val path = rs.getString(1)
+                    val track = if (rs.getInt(4) == 0) null else DesktopTrack(
+                        file = File(path),
+                        title = rs.getString(5) ?: File(path).nameWithoutExtension,
+                        artist = rs.getString(6),
+                        album = rs.getString(7),
+                        durationMs = rs.getLong(8),
+                        trackNumber = rs.getInt(9).takeUnless { rs.wasNull() },
+                        year = rs.getInt(10).takeUnless { rs.wasNull() },
+                        sizeBytes = rs.getLong(2),
+                        albumArtist = rs.getString(11),
+                        genre = rs.getString(12)
+                    )
+                    put(path, FolderLibrary.Cached(rs.getLong(2), rs.getLong(3), track))
+                }
+            }
+        }
+    }
+
+    /**
+     * Makes the cache [entries], all at once: one transaction, under both of
+     * sqlite-jdbc's locks in its own order, so no other thread's statement lands
+     * inside it and a crash halfway leaves the old cache, not half of each.
+     */
+    fun saveLibraryCache(entries: Map<String, FolderLibrary.Cached>) = synchronized(connection) {
+        synchronized(statementLock) {
+            val auto = connection.autoCommit
+            connection.autoCommit = false
+            try {
+                connection.createStatement().use { it.executeUpdate("DELETE FROM library_cache") }
+                connection.prepareStatement(
+                    "INSERT INTO library_cache(path, size, modified, isTrack, title, artist, album, durationMs, " +
+                        "trackNumber, year, albumArtist, genre) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+                ).use { ps ->
+                    for ((path, entry) in entries) {
+                        val track = entry.track
+                        ps.setString(1, path)
+                        ps.setLong(2, entry.size)
+                        ps.setLong(3, entry.modified)
+                        ps.setInt(4, if (track == null) 0 else 1)
+                        ps.setString(5, track?.title)
+                        ps.setString(6, track?.artist)
+                        ps.setString(7, track?.album)
+                        ps.setLong(8, track?.durationMs ?: 0L)
+                        if (track?.trackNumber != null) ps.setInt(9, track.trackNumber) else ps.setNull(9, java.sql.Types.INTEGER)
+                        if (track?.year != null) ps.setInt(10, track.year) else ps.setNull(10, java.sql.Types.INTEGER)
+                        ps.setString(11, track?.albumArtist)
+                        ps.setString(12, track?.genre)
+                        ps.addBatch()
+                    }
+                    ps.executeBatch()
+                }
+                connection.commit()
+            } catch (t: Throwable) {
+                runCatching { connection.rollback() }
+                throw t
+            } finally {
+                connection.autoCommit = auto
             }
         }
     }

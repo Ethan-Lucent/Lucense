@@ -657,13 +657,30 @@ class DesktopController(parent: CoroutineScope) {
                 }
                 scanning = true
                 scanned = 0
-                val found = FolderLibrary.scan(roots) { count, name ->
+                val known = io { runCatching { store.libraryCache() }.getOrDefault(emptyMap()) }
+                // At startup, the library as the last scan left it, straight away,
+                // while this one makes sure of it - which, with nothing changed, is
+                // a stat per file rather than every tag read again.
+                if (tracks.isEmpty() && known.isNotEmpty()) {
+                    val inRoots = roots.map { it.absolutePath + File.separator }
+                    tracks = known.entries
+                        .filter { (path, entry) -> entry.track != null && inRoots.any { path.startsWith(it) } }
+                        .mapNotNull { it.value.track }
+                        .sortedWith(FolderLibrary.ORDER)
+                    refreshAggregates()
+                    if (tracks.any { it.file.absolutePath == settings.lastTrack }) restorePlace()
+                }
+                val (found, kept) = FolderLibrary.scan(roots, known, { count, name ->
                     // Called from the IO dispatcher; only cheap value writes here.
                     scanned = count
                     scanningName = name
-                }
+                })
                 tracks = found
                 scanning = false
+                io {
+                    runCatching { store.saveLibraryCache(kept) }
+                        .onFailure { System.err.println("Lucense: the library cache wasn't saved: ${it.message}") }
+                }
                 refreshAggregates()
                 restorePlace()
             } while (rescanWanted)

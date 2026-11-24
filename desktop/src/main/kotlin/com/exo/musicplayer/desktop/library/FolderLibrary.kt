@@ -51,18 +51,53 @@ object FolderLibrary {
     suspend fun scan(
         roots: List<File>,
         onProgress: (scanned: Int, current: String) -> Unit = { _, _ -> }
-    ): List<DesktopTrack> = withContext(Dispatchers.IO) {
+    ): List<DesktopTrack> = scan(roots, emptyMap(), onProgress).first
+
+    /**
+     * What a scan read from one file, with the file's size and date at the time,
+     * for the library cache. [track] is null for a file that turned out not to
+     * be a song, so it isn't looked into again either.
+     */
+    data class Cached(val size: Long, val modified: Long, val track: DesktopTrack?)
+
+    /** The library's order: by artist, then title, whatever the case. */
+    val ORDER: Comparator<DesktopTrack> = compareBy({ it.displayArtist.lowercase() }, { it.title.lowercase() })
+
+    /**
+     * A scan that remembers. Every file is still found and looked at - its size
+     * and date, a stat - but one the same size and date as in [known] isn't read
+     * again: what was read then stands. Reading is jaudiotagger through every
+     * tag, and for a file without a length in its header the whole file, or
+     * ffmpeg; for a thousand songs that was the minute the library sat empty at
+     * every start. Returns the tracks, in the library's order, and what to
+     * remember for next time - only files still there.
+     */
+    suspend fun scan(
+        roots: List<File>,
+        known: Map<String, Cached>,
+        onProgress: (scanned: Int, current: String) -> Unit = { _, _ -> },
+        reader: (File) -> DesktopTrack? = ::read
+    ): Pair<List<DesktopTrack>, Map<String, Cached>> = withContext(Dispatchers.IO) {
         val files = mutableListOf<File>()
         roots.filter { it.isDirectory }.forEach { collect(it, files, 0) }
-
+        val kept = LinkedHashMap<String, Cached>()
         // A download folder inside a music folder is scanned from both roots, so
         // the same file would otherwise appear twice.
-        files.distinctBy { it.absolutePath.lowercase() }.mapIndexedNotNull { index, file ->
+        val tracks = files.distinctBy { it.absolutePath.lowercase() }.mapIndexedNotNull { index, file ->
             onProgress(index + 1, file.name)
-            read(file)
-        }.sortedWith(
-            compareBy({ it.displayArtist.lowercase() }, { it.title.lowercase() })
-        )
+            val path = file.absolutePath
+            val size = file.length()
+            val modified = file.lastModified()
+            val before = known[path]
+            val entry = if (before != null && before.size == size && before.modified == modified) {
+                before
+            } else {
+                Cached(size, modified, reader(file))
+            }
+            kept[path] = entry
+            entry.track
+        }.sortedWith(ORDER)
+        tracks to kept
     }
 
     /**
