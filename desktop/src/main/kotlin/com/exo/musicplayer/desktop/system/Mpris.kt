@@ -33,6 +33,12 @@ class Mpris(private val actions: Actions) {
         fun stop()
         fun seekTo(ms: Long)
         fun positionMs(): Long
+
+        /** The desktop's shuffle switch. */
+        fun setShuffle(on: Boolean) = Unit
+
+        /** The desktop's repeat switch: "None", "Track" or "Playlist", as MPRIS names them. */
+        fun setLoop(status: String) = Unit
     }
 
     /** The song as the desktop shows it. */
@@ -47,7 +53,10 @@ class Mpris(private val actions: Actions) {
         /** A `file://` address of the cover. */
         val artUrl: String? = null,
         val canGoNext: Boolean = true,
-        val canGoPrevious: Boolean = true
+        val canGoPrevious: Boolean = true,
+        val shuffle: Boolean = false,
+        /** "None", "Track" or "Playlist". */
+        val loop: String = LOOP_NONE
     )
 
     @Volatile private var connection: DBusConnection? = null
@@ -123,6 +132,8 @@ class Mpris(private val actions: Actions) {
         }
         if (before.canGoNext != next.canGoNext) changed["CanGoNext"] = Variant(next.canGoNext)
         if (before.canGoPrevious != next.canGoPrevious) changed["CanGoPrevious"] = Variant(next.canGoPrevious)
+        if (before.shuffle != next.shuffle) changed["Shuffle"] = Variant(next.shuffle)
+        if (before.loop != next.loop) changed["LoopStatus"] = Variant(next.loop)
         if (changed.isNotEmpty()) {
             runCatching { bus.sendMessage(Properties.PropertiesChanged(PATH, PLAYER, changed, emptyList())) }
         }
@@ -185,7 +196,9 @@ class Mpris(private val actions: Actions) {
                 "CanPlay" to Variant(playable),
                 "CanPause" to Variant(playable),
                 "CanSeek" to Variant(playable),
-                "CanControl" to Variant(true)
+                "CanControl" to Variant(true),
+                "Shuffle" to Variant(current.shuffle),
+                "LoopStatus" to Variant(current.loop)
             )
         }
         else -> throw DBusExecutionException("No such interface: $face")
@@ -246,7 +259,18 @@ class Mpris(private val actions: Actions) {
         override fun <A : Any?> Get(interfaceName: String, propertyName: String): A =
             (properties(interfaceName)[propertyName] ?: throw DBusExecutionException("No such property: $propertyName")) as A
 
-        override fun <A : Any?> Set(interfaceName: String, propertyName: String, value: A) = Unit
+        /**
+         * The desktop flipping shuffle or repeat. The only writable properties
+         * Lucense has; anything else is quietly refused, as MPRIS allows.
+         */
+        override fun <A : Any?> Set(interfaceName: String, propertyName: String, value: A) {
+            if (interfaceName != PLAYER) return
+            val raw = (value as? Variant<*>)?.value ?: value
+            when (propertyName) {
+                "Shuffle" -> (raw as? Boolean)?.let { actions.setShuffle(it) }
+                "LoopStatus" -> (raw as? String)?.takeIf { it in LOOPS }?.let { actions.setLoop(it) }
+            }
+        }
 
         override fun GetAll(interfaceName: String): Map<String, Variant<*>> = properties(interfaceName)
     }
@@ -257,6 +281,11 @@ class Mpris(private val actions: Actions) {
         const val ROOT = "org.mpris.MediaPlayer2"
         const val PLAYER = "org.mpris.MediaPlayer2.Player"
         private const val NO_TRACK = "/org/mpris/MediaPlayer2/TrackList/NoTrack"
+
+        const val LOOP_NONE = "None"
+        const val LOOP_TRACK = "Track"
+        const val LOOP_PLAYLIST = "Playlist"
+        private val LOOPS = setOf(LOOP_NONE, LOOP_TRACK, LOOP_PLAYLIST)
 
         /** The installed menu entry's name, without .desktop: jpackage's package-name, a dash, the app's name. */
         const val DESKTOP_ENTRY = "lucense-Lucense"

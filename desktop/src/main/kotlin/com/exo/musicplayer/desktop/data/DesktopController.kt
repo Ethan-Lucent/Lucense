@@ -997,6 +997,7 @@ class DesktopController(parent: CoroutineScope) {
         set(value) {
             shuffleState.value = value
             settings.shuffle = value
+            tellDesktopPlayer()
             // Shuffled around whatever is playing rather than from the top, so
             // turning it on doesn't cut the current track off, and turning it
             // off puts the rest of the list back in its own order.
@@ -1010,6 +1011,7 @@ class DesktopController(parent: CoroutineScope) {
         get() = repeatState.value
         set(value) {
             repeatState.value = value
+            tellDesktopPlayer()
             settings.repeat = value.name
             // Repeat one means the next song is this one again, and repeat all
             // means the end of the list runs back to the top; both change what
@@ -1617,6 +1619,16 @@ class DesktopController(parent: CoroutineScope) {
             }
         }
         override fun positionMs(): Long = engine.status.value.positionMs
+        override fun setShuffle(on: Boolean) { scope.launch { shuffle = on } }
+        override fun setLoop(status: String) {
+            scope.launch {
+                repeat = when (status) {
+                    Mpris.LOOP_TRACK -> RepeatMode.ONE
+                    Mpris.LOOP_PLAYLIST -> RepeatMode.ALL
+                    else -> RepeatMode.OFF
+                }
+            }
+        }
     })
 
     /** Tells the Linux desktop what is playing, for its media controls; nothing elsewhere. */
@@ -1634,7 +1646,13 @@ class DesktopController(parent: CoroutineScope) {
                 album = track?.album?.takeIf { it.isNotBlank() },
                 lengthMs = status.durationMs.takeIf { it > 0L } ?: track?.durationMs ?: 0L,
                 playing = status.playing,
-                artUrl = cover?.ifBlank { null }
+                artUrl = cover?.ifBlank { null },
+                shuffle = shuffle,
+                loop = when (repeat) {
+                    RepeatMode.ONE -> Mpris.LOOP_TRACK
+                    RepeatMode.ALL -> Mpris.LOOP_PLAYLIST
+                    RepeatMode.OFF -> Mpris.LOOP_NONE
+                }
             ),
             status.positionMs
         )

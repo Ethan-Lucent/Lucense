@@ -76,6 +76,8 @@ class LinuxTest {
             override fun stop() { calls += "stop" }
             override fun seekTo(ms: Long) { calls += "seekTo $ms"; position = ms }
             override fun positionMs(): Long = position
+            override fun setShuffle(on: Boolean) { calls += "shuffle $on" }
+            override fun setLoop(status: String) { calls += "loop $status" }
         })
         val started = mpris.start()
         mpris.problem?.printStackTrace()
@@ -104,6 +106,20 @@ class LinuxTest {
             run("playerctl", "-p", "lucense", "position", "30")
             eventually("the four calls arrive") { calls.size >= 4 }
             assertEquals(listOf("playPause", "next", "previous", "seekTo 30000"), calls.toList())
+
+            // Shuffle and repeat, both ways: the desktop's switches reach Lucense, and Lucense's show.
+            calls.clear()
+            run("playerctl", "-p", "lucense", "shuffle", "On")
+            run("playerctl", "-p", "lucense", "loop", "Track")
+            eventually("shuffle and repeat arrive") { calls.size >= 2 }
+            assertEquals(listOf("shuffle true", "loop Track"), calls.toList())
+            mpris.update(
+                Mpris.NowPlaying(key = "/music/Alan Walker - Faded.mp3", title = "Faded", playing = true, lengthMs = 212_000,
+                    shuffle = true, loop = Mpris.LOOP_PLAYLIST),
+                position
+            )
+            eventually("shuffle shows") { run("playerctl", "-p", "lucense", "shuffle") == "On" }
+            eventually("repeat shows") { run("playerctl", "-p", "lucense", "loop") == "Playlist" }
 
             mpris.update(Mpris.NowPlaying(key = "/music/Alan Walker - Faded.mp3", title = "Faded", playing = false, lengthMs = 212_000), position)
             eventually("paused shows") { run("playerctl", "-p", "lucense", "status") == "Paused" }
