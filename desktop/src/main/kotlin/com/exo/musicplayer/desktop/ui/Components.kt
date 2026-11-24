@@ -47,7 +47,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusEventModifierNode
+import androidx.compose.ui.focus.FocusState
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -297,20 +303,70 @@ fun Hint(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** Single-line input styled for a dense layout. */
 /**
- * Whether a text box currently holds the keyboard.
+ * Whether a text box holds the keyboard, in the window that has it.
  *
  * The window claims a few keys before anything else sees them, which is right
  * for Ctrl+A over the song list and wrong the moment someone is typing in a
  * box: there, Ctrl+A means the text in it. The window stands back while this
  * is set, which also hands back Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+Z, Home, End and
- * shift-selection, all of which the text field has always known how to do.
+ * shift-selection, all of which the text field has always known how to do -
+ * and the space bar, the arrows and the one-letter shortcuts, which a text box
+ * types rather than claims, so they used to reach the window too: a space in a
+ * search box paused the music, and an "m" muted it.
+ *
+ * Every text box takes part through [typingField]. Boxes are counted rather
+ * than sharing one flag, so focus going straight from one box to another, or a
+ * focused box leaving the screen, can't leave it stuck either way; and a box
+ * only counts while its own window is the one in front.
+ *
+ * UI thread only.
  */
 object Typing {
-    var active by mutableStateOf(false)
+    private val holders = LinkedHashSet<TypingNode>()
+
+    val active: Boolean get() = holders.any { it.inFocusedWindow }
+
+    internal fun hold(node: TypingNode) {
+        holders += node
+    }
+
+    internal fun release(node: TypingNode) {
+        holders -= node
+    }
 }
 
+/** Counts this text field as [Typing] while it has the focus. */
+fun Modifier.typingField(): Modifier = this then TypingElement
+
+private object TypingElement : ModifierNodeElement<TypingNode>() {
+    override fun create() = TypingNode()
+    override fun update(node: TypingNode) = Unit
+    override fun hashCode(): Int = "typingField".hashCode()
+    override fun equals(other: Any?): Boolean = other === this
+}
+
+internal class TypingNode : Modifier.Node(), FocusEventModifierNode, CompositionLocalConsumerModifierNode {
+    private var window: WindowInfo? = null
+
+    /** Whether this box's window is the one the keyboard goes to. */
+    val inFocusedWindow: Boolean get() = window?.isWindowFocused ?: true
+
+    override fun onAttach() {
+        window = currentValueOf(LocalWindowInfo)
+    }
+
+    override fun onFocusEvent(focusState: FocusState) {
+        if (focusState.isFocused) Typing.hold(this) else Typing.release(this)
+    }
+
+    override fun onDetach() {
+        Typing.release(this)
+        window = null
+    }
+}
+
+/** Single-line input styled for a dense layout. */
 @Composable
 fun TextInput(
     value: String,
@@ -357,7 +413,7 @@ fun TextInput(
                 cursorBrush = SolidColor(Palette.Accent),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .onFocusChanged { Typing.active = it.isFocused }
+                    .typingField()
                     .then(
                         if (onSubmit == null) {
                             Modifier

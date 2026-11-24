@@ -40,7 +40,6 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
@@ -60,7 +59,8 @@ import com.exo.musicplayer.desktop.ui.MiniPlayer
 import com.exo.musicplayer.desktop.ui.Palette
 import com.exo.musicplayer.desktop.ui.LucenseDesktopTheme
 import com.exo.musicplayer.desktop.ui.ScaledToWindow
-import com.exo.musicplayer.desktop.ui.Typing
+import com.exo.musicplayer.desktop.ui.WindowShortcuts
+import com.exo.musicplayer.desktop.ui.shortcutActions
 import com.exo.musicplayer.desktop.system.SingleInstance
 import androidx.compose.runtime.snapshotFlow
 import java.awt.GraphicsEnvironment
@@ -130,6 +130,7 @@ private fun lucense(args: Array<String>) = application {
     }
 
     val mainWindow = rememberWindowState(width = 1280.dp, height = 820.dp)
+    val shortcuts = remember(controller) { WindowShortcuts(controller.shortcutActions()) }
     Window(
         // Kept in the tray when that is chosen; otherwise closing quits.
         onCloseRequest = { if (!controller.closeToTray()) exitApplication() },
@@ -140,82 +141,11 @@ private fun lucense(args: Array<String>) = application {
         // Lucense draws its own title strip and edges (WindowFrame), and
         // Windows 11 rounds the corners.
         undecorated = true,
-        // Window level, not view level: Ctrl+A has to work whether or not the
-        // track table happens to hold focus, and a text field that owns the
-        // keystroke still gets first refusal because it is a preview handler
-        // only for keys we claim.
-        onPreviewKeyEvent = { event ->
-            when {
-                // Someone is typing, so these keys are the text box's, not the
-                // window's: Ctrl+A is the text in the box rather than every
-                // song on screen, and Escape is its own business.
-                Typing.active -> false
-                event.type == KeyEventType.KeyDown &&
-                    event.isCtrlPressed && event.key == Key.A -> {
-                    controller.selectAll(controller.visibleTracks)
-                    true
-                }
-                event.type == KeyEventType.KeyDown && event.key == Key.Escape &&
-                    controller.hasSelection -> {
-                    controller.clearSelection()
-                    true
-                }
-                else -> false
-            }
-        },
-        // Not a preview handler: a search box that has focus gets the space bar
-        // and the arrow keys first, and these only see what it didn't want.
-        onKeyEvent = { event ->
-            if (event.type != KeyEventType.KeyDown) {
-                false
-            } else {
-                when (event.key) {
-                    Key.Spacebar -> {
-                        controller.togglePlay()
-                        true
-                    }
-                    Key.DirectionRight -> {
-                        if (event.isCtrlPressed) controller.next() else controller.seekBy(5_000)
-                        true
-                    }
-                    Key.DirectionLeft -> {
-                        if (event.isCtrlPressed) controller.previous() else controller.seekBy(-5_000)
-                        true
-                    }
-                    Key.DirectionUp -> {
-                        controller.volume = (controller.volume + 0.05f).coerceAtMost(1f)
-                        true
-                    }
-                    Key.DirectionDown -> {
-                        controller.volume = (controller.volume - 0.05f).coerceAtLeast(0f)
-                        true
-                    }
-                    Key.J -> {
-                        controller.jumpToNowPlaying()
-                        true
-                    }
-                    Key.M -> {
-                        controller.toggleMute()
-                        true
-                    }
-                    Key.S -> {
-                        controller.shuffle = !controller.shuffle
-                        true
-                    }
-                    Key.R -> {
-                        controller.cycleRepeat()
-                        true
-                    }
-                    Key.Slash -> {
-                        controller.showShortcuts = !controller.showShortcuts
-                        true
-                    }
-                    // Back from an album's or an artist's page to the cards.
-                    Key.Escape -> controller.closeGroupPage()
-                    else -> false
-                }
-            }
-        }
+        // Window level, not view level: the keys have to work whether or not
+        // the track table happens to hold focus. Which keys are taken before
+        // the focus sees them, and which only after, is in WindowShortcuts.
+        onPreviewKeyEvent = shortcuts::preview,
+        onKeyEvent = shortcuts::bubble
     ) {
         EveryIconSize()
         // The smallest window the scaled layout still fits in.

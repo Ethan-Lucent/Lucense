@@ -273,7 +273,8 @@ private fun LyricsEditor(initial: String, onSave: (String) -> Unit) {
                 onValueChange = { text = it },
                 textStyle = MaterialTheme.typography.bodySmall.copy(color = Palette.Text),
                 cursorBrush = SolidColor(Palette.Accent),
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                // So a space or a letter typed into the lyrics is typed, not a shortcut.
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).typingField()
             )
         }
         Spacer(Modifier.height(10.dp))
