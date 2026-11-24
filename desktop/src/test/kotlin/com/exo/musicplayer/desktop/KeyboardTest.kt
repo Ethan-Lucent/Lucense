@@ -24,6 +24,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import com.exo.musicplayer.desktop.ui.GhostButton
 import com.exo.musicplayer.desktop.ui.LucenseDesktopTheme
+import com.exo.musicplayer.desktop.ui.SearchBoxes
 import com.exo.musicplayer.desktop.ui.TextInput
 import com.exo.musicplayer.desktop.ui.Typing
 import com.exo.musicplayer.desktop.ui.WindowShortcuts
@@ -37,7 +38,7 @@ import kotlin.test.assertTrue
 class KeyboardTest {
 
     /** Writes down what the keys asked for. */
-    private class Recorder : WindowShortcuts.Actions {
+    private open class Recorder : WindowShortcuts.Actions {
         val calls = mutableListOf<String>()
         override fun togglePlay() { calls += "togglePlay" }
         override fun next() { calls += "next" }
@@ -86,9 +87,57 @@ class KeyboardTest {
         }
         assertEquals(emptyList(), recorder.calls)
 
-        // Escape still goes back from a page, as it always did from a box on one.
+        // Escape lets go of the box - the window has its keys back - rather than
+        // doing what Escape does elsewhere while still in it.
         box.performKeyInput { pressKey(Key.Escape) }
-        assertEquals(listOf("closeGroupPage"), recorder.calls)
+        waitForIdle()
+        assertFalse(Typing.active, "Escape left the box")
+        assertEquals(emptyList(), recorder.calls)
+    }
+
+    @Test
+    fun ctrlFGoesToTheSearchBoxFromAnywhere() = runComposeUiTest {
+        val recorder = object : Recorder() {
+            override fun focusSearch(): Boolean = SearchBoxes.focus()
+        }
+        setContent {
+            AppWindow(WindowShortcuts(recorder)) {
+                Column {
+                    GhostButton("Elsewhere") {}
+                    TextInput("", {}, "Notes")
+                    TextInput("", {}, "Search", search = true)
+                }
+            }
+        }
+        val boxes = onAllNodes(hasSetTextAction())
+        // From a button...
+        onNodeWithText("Elsewhere").performSemanticsAction(SemanticsActions.RequestFocus)
+        onNodeWithText("Elsewhere").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.F) } }
+        waitForIdle()
+        boxes[1].assertIsFocused()
+        // ...and from another box, where Ctrl+F would otherwise be the box's.
+        boxes[0].performSemanticsAction(SemanticsActions.RequestFocus)
+        boxes[0].performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.F) } }
+        waitForIdle()
+        boxes[1].assertIsFocused()
+    }
+
+    @Test
+    fun theOtherWindowsHaveThePlayingKeysOnly() = runComposeUiTest {
+        val recorder = Recorder()
+        setContent { AppWindow(WindowShortcuts(recorder, playbackOnly = true)) { GhostButton("Play") {} } }
+        val button = onNodeWithText("Play")
+        button.performSemanticsAction(SemanticsActions.RequestFocus)
+        button.performKeyInput {
+            pressKey(Key.Spacebar)
+            pressKey(Key.M)
+            pressKey(Key.J)
+            pressKey(Key.Slash)
+            pressKey(Key.Escape)
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.A) }
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.DirectionRight) }
+        }
+        assertEquals(listOf("togglePlay", "mute", "next"), recorder.calls)
     }
 
     @Test

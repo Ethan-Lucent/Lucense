@@ -30,9 +30,14 @@ import com.exo.musicplayer.desktop.data.DesktopController
  * Shortcuts are plain keys. With Ctrl, Alt or the Super key held they are left
  * alone - Ctrl+S is not "shuffle", and Ctrl+Space switches the keyboard layout
  * on many Linux desktops - apart from Ctrl+Left and Ctrl+Right (previous, next)
- * and Ctrl+Up and Ctrl+Down, which have always changed the volume too.
+ * and Ctrl+Up and Ctrl+Down, which have always changed the volume too. Ctrl+F
+ * goes to the page's search box, from anywhere, even another text box.
+ *
+ * [playbackOnly] is for the other windows - the mini player, the lyrics - where
+ * the playing keys work (space, arrows, M, S, R) but not the ones about the main
+ * window's list and pages.
  */
-class WindowShortcuts(private val actions: Actions) {
+class WindowShortcuts(private val actions: Actions, private val playbackOnly: Boolean = false) {
 
     /** What the keys do. The real one is [DesktopController.shortcutActions]. */
     interface Actions {
@@ -53,6 +58,9 @@ class WindowShortcuts(private val actions: Actions) {
 
         /** Back from an album's or an artist's page to the cards; false when none was open. */
         fun closeGroupPage(): Boolean
+
+        /** Puts the keyboard in the page's search box; false when the page has none. */
+        fun focusSearch(): Boolean = false
     }
 
     /**
@@ -62,6 +70,11 @@ class WindowShortcuts(private val actions: Actions) {
     private var spaceHeld = false
 
     fun preview(event: KeyEvent): Boolean {
+        if (!playbackOnly && event.type == KeyEventType.KeyDown && event.isCtrlPressed && !event.isAltPressed &&
+            event.key == Key.F && actions.focusSearch()
+        ) {
+            return true
+        }
         if (Typing.active) {
             // Its release goes to the box, so it will never be seen here.
             spaceHeld = false
@@ -79,6 +92,7 @@ class WindowShortcuts(private val actions: Actions) {
                 // Release and all, so a focused button never sees half a press.
                 true
             }
+            playbackOnly -> false
             down && event.isCtrlPressed && event.key == Key.A -> {
                 actions.selectAllVisible()
                 true
@@ -90,8 +104,9 @@ class WindowShortcuts(private val actions: Actions) {
 
     fun bubble(event: KeyEvent): Boolean {
         if (event.type != KeyEventType.KeyDown) return false
-        // Even from a text box on the page: Escape there was always the way back.
-        if (event.key == Key.Escape) return actions.closeGroupPage()
+        // Back from an album's page. A text box takes the first Escape itself, to
+        // let go of the keyboard; the next one comes here.
+        if (event.key == Key.Escape) return !playbackOnly && actions.closeGroupPage()
         if (Typing.active || event.isAltPressed || event.isMetaPressed) return false
         if (event.isCtrlPressed) {
             return when (event.key) {
@@ -107,11 +122,11 @@ class WindowShortcuts(private val actions: Actions) {
             Key.DirectionLeft -> act { actions.seekBy(-SEEK_STEP_MS) }
             Key.DirectionUp -> act { actions.nudgeVolume(VOLUME_STEP) }
             Key.DirectionDown -> act { actions.nudgeVolume(-VOLUME_STEP) }
-            Key.J -> act { actions.jumpToNowPlaying() }
+            Key.J -> !playbackOnly && act { actions.jumpToNowPlaying() }
             Key.M -> act { actions.toggleMute() }
             Key.S -> act { actions.toggleShuffle() }
             Key.R -> act { actions.cycleRepeat() }
-            Key.Slash -> act { actions.toggleShortcutsHelp() }
+            Key.Slash -> !playbackOnly && act { actions.toggleShortcutsHelp() }
             else -> false
         }
     }
@@ -157,5 +172,6 @@ fun DesktopController.shortcutActions(): WindowShortcuts.Actions {
             return true
         }
         override fun closeGroupPage(): Boolean = controller.closeGroupPage()
+        override fun focusSearch(): Boolean = SearchBoxes.focus()
     }
 }

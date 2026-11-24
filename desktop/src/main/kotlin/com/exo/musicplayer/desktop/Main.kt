@@ -131,6 +131,8 @@ private fun lucense(args: Array<String>) = application {
 
     val mainWindow = rememberWindowState(width = 1280.dp, height = 820.dp)
     val shortcuts = remember(controller) { WindowShortcuts(controller.shortcutActions()) }
+    // The other windows - the mini player, the lyrics - get the playing keys only.
+    val playbackKeys = remember(controller) { WindowShortcuts(controller.shortcutActions(), playbackOnly = true) }
     Window(
         // Kept in the tray when that is chosen; otherwise closing quits.
         onCloseRequest = { if (!controller.closeToTray()) exitApplication() },
@@ -197,7 +199,9 @@ private fun lucense(args: Array<String>) = application {
             undecorated = true,
             transparent = true,
             resizable = false,
-            alwaysOnTop = true
+            alwaysOnTop = true,
+            onPreviewKeyEvent = playbackKeys::preview,
+            onKeyEvent = playbackKeys::bubble
         ) {
             EveryIconSize()
             LaunchedEffect(Unit) {
@@ -233,12 +237,13 @@ private fun lucense(args: Array<String>) = application {
             ),
             undecorated = true,
             alwaysOnTop = true,
+            onPreviewKeyEvent = playbackKeys::preview,
             onKeyEvent = { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
                     controller.lyricsFullscreen = false
                     true
                 } else {
-                    false
+                    playbackKeys.bubble(event)
                 }
             }
         ) {
@@ -252,7 +257,9 @@ private fun lucense(args: Array<String>) = application {
             onCloseRequest = { controller.lyricsDetached = false },
             title = "Lyrics · Lucense",
             icon = painterResource(FALLBACK_ICON),
-            state = rememberWindowState(width = 460.dp, height = 700.dp)
+            state = rememberWindowState(width = 460.dp, height = 700.dp),
+            onPreviewKeyEvent = playbackKeys::preview,
+            onKeyEvent = playbackKeys::bubble
         ) {
             EveryIconSize()
             LaunchedEffect(Unit) { window.minimumSize = Dimension(300, 360) }

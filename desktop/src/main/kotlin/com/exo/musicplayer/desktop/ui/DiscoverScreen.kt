@@ -237,6 +237,7 @@ private fun HomePage(genres: List<String>, shared: Shared) {
                         value = search.query,
                         onValueChange = browser::setQuery,
                         placeholder = "A genre or an artist",
+                        search = true,
                         leading = Icons.Default.Search,
                         modifier = Modifier.weight(1f)
                     )

@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.exo.musicplayer.data.lyrics.LrcParser
 import com.exo.musicplayer.desktop.data.DesktopController
 import com.exo.musicplayer.desktop.library.DesktopTrack
+import androidx.compose.ui.platform.LocalFocusManager
 
 /**
  * Lyrics for the playing track.
@@ -268,13 +269,14 @@ private fun LyricsEditor(initial: String, onSave: (String) -> Unit) {
                 .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
                 .padding(10.dp)
         ) {
+            val focus = LocalFocusManager.current
             BasicTextField(
                 value = text,
                 onValueChange = { text = it },
                 textStyle = MaterialTheme.typography.bodySmall.copy(color = Palette.Text),
                 cursorBrush = SolidColor(Palette.Accent),
                 // So a space or a letter typed into the lyrics is typed, not a shortcut.
-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).typingField()
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).typingField().leaveOnEscape(focus)
             )
         }
         Spacer(Modifier.height(10.dp))

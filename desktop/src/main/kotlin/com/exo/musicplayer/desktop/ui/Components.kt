@@ -77,6 +77,10 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.sign
 import kotlinx.coroutines.delay
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.FocusRequesterModifierNode
+import androidx.compose.ui.focus.requestFocus
+import androidx.compose.ui.platform.LocalFocusManager
 
 /**
  * The small pieces every screen shares.
@@ -366,7 +370,61 @@ internal class TypingNode : Modifier.Node(), FocusEventModifierNode, Composition
     }
 }
 
-/** Single-line input styled for a dense layout. */
+/**
+ * The search box on the page in front, for Ctrl+F.
+ *
+ * A box marked [searchBox] joins while it is on screen. Only the page in front
+ * is composed at all, so on any page there is one - the Library's, an album
+ * page's, Identify's - and the newest one in the focused window is the one
+ * asked for. UI thread only.
+ */
+object SearchBoxes {
+    private val boxes = ArrayList<SearchBoxNode>()
+
+    internal fun add(node: SearchBoxNode) {
+        boxes += node
+    }
+
+    internal fun remove(node: SearchBoxNode) {
+        boxes -= node
+    }
+
+    /** Puts the keyboard in the page's search box; false when the page has none. */
+    fun focus(): Boolean = boxes.lastOrNull { it.inFocusedWindow }?.requestFocus() ?: false
+}
+
+/** Makes this text field the one Ctrl+F goes to while it is on screen. */
+fun Modifier.searchBox(): Modifier = this then SearchBoxElement
+
+private object SearchBoxElement : ModifierNodeElement<SearchBoxNode>() {
+    override fun create() = SearchBoxNode()
+    override fun update(node: SearchBoxNode) = Unit
+    override fun hashCode(): Int = "searchBox".hashCode()
+    override fun equals(other: Any?): Boolean = other === this
+}
+
+internal class SearchBoxNode : Modifier.Node(), FocusRequesterModifierNode, CompositionLocalConsumerModifierNode {
+    private var window: WindowInfo? = null
+
+    val inFocusedWindow: Boolean get() = window?.isWindowFocused ?: true
+
+    override fun onAttach() {
+        window = currentValueOf(LocalWindowInfo)
+        SearchBoxes.add(this)
+    }
+
+    override fun onDetach() {
+        SearchBoxes.remove(this)
+        window = null
+    }
+}
+
+/**
+ * Single-line input styled for a dense layout.
+ *
+ * Escape leaves it - the keyboard goes back to the window, so the space bar
+ * plays and pauses again - and [search] makes it the box Ctrl+F jumps to.
+ */
 @Composable
 fun TextInput(
     value: String,
@@ -375,8 +433,10 @@ fun TextInput(
     modifier: Modifier = Modifier,
     leading: ImageVector? = null,
     singleLine: Boolean = true,
+    search: Boolean = false,
     onSubmit: (() -> Unit)? = null
 ) {
+    val focus = LocalFocusManager.current
     Row(
         modifier
             .heightIn(min = CONTROL_HEIGHT)
@@ -413,7 +473,9 @@ fun TextInput(
                 cursorBrush = SolidColor(Palette.Accent),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(if (search) Modifier.searchBox() else Modifier)
                     .typingField()
+                    .leaveOnEscape(focus)
                     .then(
                         if (onSubmit == null) {
                             Modifier
@@ -423,6 +485,16 @@ fun TextInput(
                     )
             )
         }
+    }
+}
+
+/** Escape leaves the box, rather than doing whatever Escape does elsewhere while still in it. */
+fun Modifier.leaveOnEscape(focus: FocusManager): Modifier = onPreviewKeyEvent { event ->
+    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+        focus.clearFocus()
+        true
+    } else {
+        false
     }
 }
 

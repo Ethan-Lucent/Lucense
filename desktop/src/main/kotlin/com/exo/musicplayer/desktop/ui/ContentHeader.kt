@@ -113,6 +113,7 @@ internal fun ContentHeader(
                     value = controller.collectionQuery(kind),
                     onValueChange = { controller.searchCollection(kind, it) },
                     placeholder = if (kind == CollectionKind.ALBUMS) "Search albums" else "Search artists",
+                    search = true,
                     leading = Icons.Default.Search,
                     modifier = Modifier.width(if (narrowHeader) 170.dp else 240.dp)
                 )
@@ -123,6 +124,7 @@ internal fun ContentHeader(
                     value = controller.query,
                     onValueChange = { controller.query = it },
                     placeholder = if (narrowHeader) "Search" else "Search · artist: album: fav:",
+                    search = true,
                     leading = Icons.Default.Search,
                     modifier = Modifier.width(if (narrowHeader) 170.dp else 240.dp)
                 )
