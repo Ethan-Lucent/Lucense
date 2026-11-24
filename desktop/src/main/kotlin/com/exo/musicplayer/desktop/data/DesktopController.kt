@@ -24,8 +24,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import com.exo.musicplayer.data.archive.ArchiveEntry
-import com.exo.musicplayer.data.archive.MusicArchive
 import com.exo.musicplayer.data.download.DownloadQuality
 import com.exo.musicplayer.data.download.LinkResolver
 import com.exo.musicplayer.data.download.ResolvedLink
@@ -3966,21 +3964,19 @@ class DesktopController(parent: CoroutineScope) {
     fun dismissSelectionNote() { selectionNote = null }
 
     // ---- Zip and ship -------------------------------------------------------
+    //
+    // The zipping, and how it is going, are kept in Archiver; what goes into a
+    // zip is picked here.
 
-    /** Progress and outcome of the current archive job. */
-    var archiveRunning by mutableStateOf(false)
-        private set
-    var archiveProgress by mutableStateOf(0f)
-        private set
-    var archiveCurrent by mutableStateOf("")
-        private set
-    var archiveNote by mutableStateOf<String?>(null)
-        private set
-    var archiveFile by mutableStateOf<File?>(null)
-        private set
+    private val archiver = Archiver(scope, settings)
 
-    private var archiveJob: Job? = null
-    @Volatile private var archiveCancelled = false
+    val archiveRunning: Boolean get() = archiver.archiveRunning
+    val archiveProgress: Float get() = archiver.archiveProgress
+    val archiveCurrent: String get() = archiver.archiveCurrent
+    var archiveNote: String?
+        get() = archiver.archiveNote
+        private set(value) { archiver.archiveNote = value }
+    val archiveFile: File? get() = archiver.archiveFile
 
     /** Zips the whole library. */
     fun zipLibrary() = startArchive("Library", tracks)
@@ -3994,92 +3990,10 @@ class DesktopController(parent: CoroutineScope) {
         }
     }
 
-    /**
-     * Packs [chosen] into a zip beside the downloads folder.
-     *
-     * Entry names carry the artist so an archive is navigable once unpacked —
-     * a folder of two hundred files called "01.mp3" is not. Numbering keeps a
-     * playlist's order, which the filesystem would otherwise sort away.
-     */
-    internal fun startArchive(label: String, chosen: List<DesktopTrack>) {
-        if (archiveRunning) return
-        if (chosen.isEmpty()) {
-            archiveNote = "Nothing to archive."
-            return
-        }
-
-        archiveCancelled = false
-        archiveRunning = true
-        archiveProgress = 0f
-        archiveNote = null
-        archiveFile = null
-
-        archiveJob = scope.launch {
-            val stamp = java.time.LocalDate.now().toString()
-            val destination = File(
-                File(settings.downloadDir, "archives"),
-                MusicArchive.safeName("Lucense $label $stamp") + ".zip"
-            )
-            val digits = chosen.size.toString().length
-            val entries = chosen.mapIndexed { index, track ->
-                val number = (index + 1).toString().padStart(digits, '0')
-                val artist = track.artist?.takeIf { it.isNotBlank() }
-                val stem = listOfNotNull(artist, track.title).joinToString(" - ")
-                ArchiveEntry(
-                    source = track.file,
-                    entryName = "$number ${MusicArchive.safeName(stem)}.${track.file.extension}"
-                )
-            }
-
-            val result = io {
-                MusicArchive.zip(
-                    entries = entries,
-                    destination = destination,
-                    onProgress = { progress ->
-                        archiveProgress = progress.fraction
-                        archiveCurrent = progress.currentName
-                    },
-                    shouldContinue = { !archiveCancelled }
-                )
-            }
-
-            archiveRunning = false
-            archiveCurrent = ""
-            result.fold(
-                onSuccess = { done ->
-                    archiveFile = done.file
-                    archiveNote = buildString {
-                        append("${done.included} tracks, ")
-                        append("%.1f MB".format(done.bytes / 1_048_576.0))
-                        if (done.skipped.isNotEmpty()) {
-                            append(" — ${done.skipped.size} missing from storage")
-                        }
-                    }
-                },
-                onFailure = { archiveNote = it.message ?: "Couldn't build the archive." }
-            )
-            archiveJob = null
-        }
-    }
-
-    fun cancelArchive() {
-        archiveCancelled = true
-        archiveJob?.cancel()
-        archiveJob = null
-        archiveRunning = false
-        archiveNote = "Cancelled."
-    }
-
-    /** Opens the folder the archive landed in, and selects it. */
-    fun revealArchive() {
-        val file = archiveFile ?: return
-        Explorer.reveal(file)
-    }
-
-    fun dismissArchive() {
-        archiveNote = null
-        archiveFile = null
-    }
+    internal fun startArchive(label: String, chosen: List<DesktopTrack>) = archiver.startArchive(label, chosen)
+    fun cancelArchive() = archiver.cancelArchive()
+    fun revealArchive() = archiver.revealArchive()
+    fun dismissArchive() = archiver.dismissArchive()
 
     // ---- Duplicates ---------------------------------------------------------
 
