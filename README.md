@@ -304,8 +304,11 @@ file said before anything touched it.
 
 ### Around the app
 
-- **Keyboard shortcuts** (Windows). They work whenever you're not typing in a
-  box, and **/** lists them all:
+- **Keyboard shortcuts** (Windows and Linux). They work whenever you're not
+  typing in a box, including right after clicking a button: the space bar always
+  plays or pauses, and never presses the button you last clicked. In a box, every
+  key is the box's, so a space or an M is typed rather than pausing or muting.
+  With Ctrl, Alt or Super held, the letters are left alone. **/** lists them all:
 
   | key | does |
   |---|---|
@@ -498,6 +501,17 @@ and writes the same PCM buffer to every open line, so they're sample-identical b
 construction rather than by resynchronisation. Secondary devices get whatever
 they can take and are dropped if they stall, so an unplugged speaker can never
 block the one you're listening to.
+
+**Effects are heard as the slider moves.** Every effect, the equalizer and the
+volume are applied before the audio output, so a change is heard only once the
+audio already queued there has played. Letting the output fill its 186 ms
+buffer, as it once did, meant a quarter of a second's lag on Linux before
+PipeWire and any Bluetooth link added their own. On Linux the playback thread
+now makes 23 ms blocks just in time and keeps about 60 ms queued (measured on
+PipeWire: 167 ms before, 55 ms after). If the output ever nearly runs dry, it
+keeps 20 ms more for the rest of the session and says so on stderr. Windows
+still keeps the buffer full. `-Dlucense.audio.latencyMs=N` sets the amount on
+either, and `=fill` turns pacing off.
 
 **The duck hotkey uses `RegisterHotKey`, not a keyboard hook.** A
 `WH_KEYBOARD_LL` hook would see every keystroke typed anywhere on the machine —
