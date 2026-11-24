@@ -13,7 +13,6 @@ import com.exo.musicplayer.data.playlist.PlaylistLinks
 import com.exo.musicplayer.data.audio.Trim
 import androidx.compose.ui.graphics.toArgb
 import com.exo.musicplayer.data.art.CoverColour
-import com.exo.musicplayer.data.library.AudioPrint
 import com.exo.musicplayer.data.library.AutoPlaylist
 import com.exo.musicplayer.data.library.SearchQuery
 import com.exo.musicplayer.data.library.Genres
@@ -27,7 +26,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import com.exo.musicplayer.data.download.DownloadQuality
 import com.exo.musicplayer.data.download.LinkResolver
 import com.exo.musicplayer.data.download.ResolvedLink
-import com.exo.musicplayer.data.library.DuplicateMatcher
 import com.exo.musicplayer.data.library.TelegramName
 import com.exo.musicplayer.data.lyrics.GeniusLyricsProvider
 import com.exo.musicplayer.data.lyrics.LrcLibProvider
@@ -91,7 +89,6 @@ import com.exo.musicplayer.desktop.download.ToolStatus
 import com.exo.musicplayer.desktop.download.YtDlp
 import com.exo.musicplayer.desktop.library.AudioKind
 import com.exo.musicplayer.desktop.library.FolderWatcher
-import com.exo.musicplayer.desktop.library.PrintReader
 import com.exo.musicplayer.desktop.system.DiscordPresence
 import com.exo.musicplayer.desktop.system.FileAssociations
 import com.exo.musicplayer.desktop.system.DuckKey
@@ -3996,128 +3993,24 @@ class DesktopController(parent: CoroutineScope) {
     fun dismissArchive() = archiver.dismissArchive()
 
     // ---- Duplicates ---------------------------------------------------------
+    //
+    // Kept in DuplicateFinder; these hand the UI's calls through to it.
 
-    var duplicates by mutableStateOf<List<DesktopDuplicateGroup>>(emptyList())
-        private set
-    var duplicatesScanning by mutableStateOf(false)
-        private set
-    var duplicatesNote by mutableStateOf<String?>(null)
-        private set
+    private val duplicateFinder = DuplicateFinder(
+        scope = scope,
+        store = store,
+        tracks = { tracks },
+        playCounts = { playCounts },
+        rescan = { rescan() }
+    )
 
-    /** Songs listened to so far in a duplicates scan, and how many need it; null when not listening. */
-    var duplicatesListening by mutableStateOf<Pair<Int, Int>?>(null)
-        private set
+    val duplicates: List<DesktopDuplicateGroup> get() = duplicateFinder.duplicates
+    val duplicatesScanning: Boolean get() = duplicateFinder.duplicatesScanning
+    val duplicatesNote: String? get() = duplicateFinder.duplicatesNote
+    val duplicatesListening: Pair<Int, Int>? get() = duplicateFinder.duplicatesListening
 
-    /**
-     * Finds the same recording stored more than once, by how it sounds.
-     *
-     * Each song's print is taken once and kept, so only files that are new or
-     * have changed are listened to; a second scan of an unchanged library is
-     * nearly instant. Names play no part: "Track 03.mp3" and a correctly
-     * tagged copy of the same song are found, and two different songs that
-     * happen to share a title are not.
-     */
-    fun findDuplicates(within: List<DesktopTrack>? = null) {
-        if (duplicatesScanning) return
-        duplicatesScanning = true
-        duplicatesNote = null
-        scope.launch {
-            val songs = within ?: tracks
-            val stored = io { store.prints() }
-            val prints = HashMap<String, IntArray>()
-            val todo = mutableListOf<DesktopTrack>()
-            songs.forEach { track ->
-                val path = track.file.absolutePath
-                val saved = stored[path]
-                val decoded = saved?.takeIf {
-                    it.size == track.file.length() && it.modified == track.file.lastModified()
-                }?.let { AudioPrint.decode(it.print) }
-                if (decoded != null) prints[path] = decoded else todo += track
-            }
-
-            if (todo.isNotEmpty()) {
-                duplicatesListening = 0 to todo.size
-                var done = 0
-                val work = Channel<DesktopTrack>(Channel.UNLIMITED)
-                todo.forEach { work.trySend(it) }
-                work.close()
-                coroutineScope {
-                    repeat(PRINTS_AT_ONCE) {
-                        launch {
-                            for (track in work) {
-                                val print = io { PrintReader.read(track.file, track.durationMs) }
-                                if (print != null) {
-                                    val path = track.file.absolutePath
-                                    prints[path] = print
-                                    io {
-                                        store.savePrint(path, track.file.length(), track.file.lastModified(), AudioPrint.encode(print))
-                                    }
-                                }
-                                done++
-                                duplicatesListening = done to todo.size
-                            }
-                        }
-                    }
-                }
-                duplicatesListening = null
-            }
-
-            val counts = playCounts
-            val byPath = songs.associateBy { it.file.absolutePath }
-            val found = io {
-                // Reading embedded art opens the file, so a comparator that
-                // called it directly would re-read the same track O(log n) times.
-                val hasArt = HashMap<String, Boolean>()
-                // Biggest file first as a stand-in for bitrate, then one with
-                // art, then the one actually played.
-                val keeperOrder = compareByDescending<DesktopTrack> { it.sizeBytes }
-                    .thenByDescending {
-                        hasArt.getOrPut(it.file.absolutePath) { Covers.hasLocalArt(it) }
-                    }
-                    .thenByDescending { counts[it.file.absolutePath] ?: 0 }
-                    .thenBy { it.file.lastModified() }
-                AudioPrint.groups(
-                    prints.mapNotNull { (path, print) ->
-                        byPath[path]?.let { AudioPrint.Entry(path, print, it.durationMs) }
-                    }
-                ).map { paths ->
-                    val members = paths.mapNotNull { byPath[it] }.sortedWith(keeperOrder)
-                    DesktopDuplicateGroup(members.first(), members.drop(1))
-                }.sortedBy { it.keep.title.lowercase(Locale.ROOT) }
-            }
-            duplicates = found
-            duplicatesScanning = false
-            if (found.isEmpty()) duplicatesNote = "No song is in the library twice."
-        }
-    }
-
-    /**
-     * Sends the chosen copies to the Recycle Bin where the platform allows it.
-     *
-     * Deliberately not [File.delete]: these are the user's own files, sitting in
-     * their own folders, and a wrong match should be recoverable.
-     */
-    fun removeDuplicates(groups: List<DesktopDuplicateGroup>) {
-        scope.launch {
-            val paths = groups.flatMap { it.remove }.map { it.file }
-            val removed = io {
-                paths.count { file ->
-                    runCatching {
-                        val desktop = java.awt.Desktop.getDesktop()
-                        if (desktop.isSupported(java.awt.Desktop.Action.MOVE_TO_TRASH)) {
-                            desktop.moveToTrash(file)
-                        } else {
-                            file.delete()
-                        }
-                    }.getOrDefault(false)
-                }
-            }
-            io { store.forgetPaths(paths.map { it.absolutePath }) }
-            duplicates = emptyList()
-            duplicatesNote = "Removed $removed file${if (removed == 1) "" else "s"}."
-            rescan()
-        }
-    }
+    fun findDuplicates(within: List<DesktopTrack>? = null) = duplicateFinder.findDuplicates(within)
+    fun removeDuplicates(groups: List<DesktopDuplicateGroup>) = duplicateFinder.removeDuplicates(groups)
 
     // ---- Albums and artists -------------------------------------------------
 
@@ -4630,9 +4523,6 @@ class DesktopController(parent: CoroutineScope) {
 
 /** How many songs the cover and tag tools look up at once. */
 private const val SONGS_AT_ONCE = 5
-
-/** Files listened to at once for duplicates by sound: decoding is the slow part. */
-private const val PRINTS_AT_ONCE = 6
 
 /**
  * How long one song's tag lookup may take. Every track goes through the tag
