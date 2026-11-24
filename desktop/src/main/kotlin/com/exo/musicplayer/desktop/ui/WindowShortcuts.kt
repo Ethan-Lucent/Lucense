@@ -61,6 +61,9 @@ class WindowShortcuts(private val actions: Actions, private val playbackOnly: Bo
 
         /** Puts the keyboard in the page's search box; false when the page has none. */
         fun focusSearch(): Boolean = false
+
+        /** A, then B and round, then off: see DesktopController.cycleAbLoop. */
+        fun cycleAbLoop() = Unit
     }
 
     /**
@@ -126,6 +129,7 @@ class WindowShortcuts(private val actions: Actions, private val playbackOnly: Bo
             Key.M -> act { actions.toggleMute() }
             Key.S -> act { actions.toggleShuffle() }
             Key.R -> act { actions.cycleRepeat() }
+            Key.L -> act { actions.cycleAbLoop() }
             Key.Slash -> !playbackOnly && act { actions.toggleShortcutsHelp() }
             else -> false
         }
@@ -173,5 +177,6 @@ fun DesktopController.shortcutActions(): WindowShortcuts.Actions {
         }
         override fun closeGroupPage(): Boolean = controller.closeGroupPage()
         override fun focusSearch(): Boolean = SearchBoxes.focus()
+        override fun cycleAbLoop() = controller.cycleAbLoop()
     }
 }

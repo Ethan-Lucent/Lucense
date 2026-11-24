@@ -64,6 +64,13 @@ import com.exo.musicplayer.desktop.data.DesktopController
 import com.exo.musicplayer.desktop.data.RepeatMode
 import com.exo.musicplayer.desktop.library.DesktopTrack
 import com.exo.musicplayer.util.asDuration
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
+import androidx.compose.foundation.border
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.text.font.FontWeight
 
 @Composable
 internal fun TransportBar(
@@ -72,7 +79,9 @@ internal fun TransportBar(
     isPlaying: Boolean,
     positionMs: Long,
     durationMs: Long,
-    onOpenGroup: (CollectionKind, String) -> Unit
+    onOpenGroup: (CollectionKind, String) -> Unit,
+    loopStartMs: Long? = null,
+    loopEndMs: Long? = null
 ) {
     val panel = controller.sidePanel
     // A narrow window's bar: a shorter seek line and title, and the two least-used toggles go.
@@ -192,6 +201,12 @@ internal fun TransportBar(
                             tint = if (controller.repeat == RepeatMode.OFF) Palette.TextDim else Palette.Accent
                         )
                     }
+                    AbLoopButton(
+                        loopStartMs = loopStartMs,
+                        loopEndMs = loopEndMs,
+                        enabled = track != null,
+                        onClick = { controller.cycleAbLoop() }
+                    )
                 }
                 Spacer(Modifier.height(4.dp))
                 // Where the drag currently is, or null when nobody is dragging.
@@ -207,17 +222,20 @@ internal fun TransportBar(
                         modifier = Modifier.width(38.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    LineSlider(
-                        value = if (durationMs > 0) {
-                            (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-                        } else {
-                            0f
-                        },
-                        enabled = track != null,
-                        onPreview = { scrubbing = it },
-                        onSet = { controller.seekFraction(it) },
-                        modifier = Modifier.width(if (narrow) 200.dp else 330.dp)
-                    )
+                    Box(Modifier.width(if (narrow) 200.dp else 330.dp)) {
+                        LineSlider(
+                            value = if (durationMs > 0) {
+                                (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                            } else {
+                                0f
+                            },
+                            enabled = track != null,
+                            onPreview = { scrubbing = it },
+                            onSet = { controller.seekFraction(it) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        LoopMarks(loopStartMs, loopEndMs, durationMs, Modifier.matchParentSize())
+                    }
                     Spacer(Modifier.width(4.dp))
                     Text(
                         durationMs.asDuration(),
@@ -395,5 +413,61 @@ private fun BarToggle(
             modifier = Modifier.size(17.dp),
             tint = if (active || highlight) Palette.Accent else Palette.TextDim
         )
+    }
+}
+
+/**
+ * The A-B loop button, beside repeat: "A-B" dim while off, "A" lit once A is
+ * set, "A-B" lit while going round. The L key does the same.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AbLoopButton(loopStartMs: Long?, loopEndMs: Long?, enabled: Boolean, onClick: () -> Unit) {
+    val looping = loopStartMs != null && loopEndMs != null
+    val armed = loopStartMs != null && loopEndMs == null
+    val tip = when {
+        looping -> "Looping ${loopStartMs!!.asDuration()} to ${loopEndMs!!.asDuration()} - click to stop (L)"
+        armed -> "A at ${loopStartMs!!.asDuration()} - click again for B (L)"
+        else -> "Loop part of the song: A here, then B (L)"
+    }
+    TooltipArea(
+        tooltip = {
+            Text(
+                tip,
+                style = MaterialTheme.typography.labelMedium,
+                color = Palette.Text,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Palette.Raised)
+                    .border(1.dp, Palette.Line, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    ) {
+        IconButton(onClick = onClick, enabled = enabled) {
+            Text(
+                if (armed) "A" else "A-B",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = if (looping || armed) Palette.Accent else Palette.TextDim
+            )
+        }
+    }
+}
+
+/** A and B on the seek line, and the stretch between them while it goes round. */
+@Composable
+private fun LoopMarks(loopStartMs: Long?, loopEndMs: Long?, durationMs: Long, modifier: Modifier) {
+    if (loopStartMs == null || durationMs <= 0L) return
+    val accent = Palette.Accent
+    Canvas(modifier) {
+        val a = (loopStartMs.toFloat() / durationMs).coerceIn(0f, 1f) * size.width
+        val b = loopEndMs?.let { (it.toFloat() / durationMs).coerceIn(0f, 1f) * size.width }
+        val middle = size.height / 2
+        val half = 6.dp.toPx()
+        if (b != null) {
+            drawRect(accent.copy(alpha = 0.22f), topLeft = Offset(a, middle - half / 2), size = Size(b - a, half))
+            drawLine(accent, Offset(b, middle - half), Offset(b, middle + half), strokeWidth = 2.dp.toPx())
+        }
+        drawLine(accent, Offset(a, middle - half), Offset(a, middle + half), strokeWidth = 2.dp.toPx())
     }
 }

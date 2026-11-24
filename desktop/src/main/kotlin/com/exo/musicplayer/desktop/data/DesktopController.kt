@@ -1019,6 +1019,20 @@ class DesktopController(parent: CoroutineScope) {
             refreshUpNext()
         }
 
+    /**
+     * The A-B button: A at what is playing now, then B and round from A, then
+     * off. Off carries on from wherever in the loop playback had got to.
+     */
+    fun cycleAbLoop() {
+        val status = engine.status.value
+        if (status.track == null) return
+        when {
+            status.loopEndMs != null -> engine.clearLoop()
+            status.loopStartMs != null -> engine.closeLoop()
+            else -> engine.openLoop()
+        }
+    }
+
     fun cycleRepeat() {
         repeat = when (repeat) {
             RepeatMode.OFF -> RepeatMode.ALL

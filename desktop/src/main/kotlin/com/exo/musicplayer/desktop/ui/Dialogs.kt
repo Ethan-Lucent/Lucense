@@ -859,7 +859,7 @@ fun EditTracksDialog(controller: DesktopController, tracks: List<DesktopTrack>, 
 fun ShortcutsDialog(onDismiss: () -> Unit) {
     ScrimDialog(
         title = "Keyboard shortcuts",
-        subtitle = "Live whenever the window has focus and you are not typing in a box",
+        subtitle = "Live whenever the window has focus and you are not typing in a box (Esc leaves one)",
         onDismiss = onDismiss
     ) {
         listOf(
@@ -871,6 +871,8 @@ fun ShortcutsDialog(onDismiss: () -> Unit) {
             "S" to "Shuffle on or off",
             "M" to "Mute, or put the volume back",
             "R" to "Repeat: all, then one, then off",
+            "L" to "Loop: A here, then B here and round, then off",
+            "Ctrl + F" to "Search, from anywhere",
             "Ctrl + A" to "Select every song in view",
             "Esc" to "Clear the selection, or back from an album or artist",
             "Ctrl + click" to "Add one song to the selection",

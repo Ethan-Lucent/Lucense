@@ -331,7 +331,9 @@ fun DesktopApp(
                 isPlaying = status.playing,
                 positionMs = status.positionMs,
                 durationMs = status.durationMs,
-                onOpenGroup = openGroup
+                onOpenGroup = openGroup,
+                loopStartMs = status.loopStartMs,
+                loopEndMs = status.loopEndMs
             )
         }
         }

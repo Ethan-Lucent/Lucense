@@ -20,7 +20,11 @@ data class PlaybackStatus(
     val durationMs: Long = 0L,
     val error: String? = null,
     /** Set once the file has been played to its end, and only then. */
-    val ended: Boolean = false
+    val ended: Boolean = false,
+    /** An A-B loop's A, once set; see [PlaybackEngine.openLoop]. */
+    val loopStartMs: Long? = null,
+    /** Its B, once set: from then on playback goes round from B to A. */
+    val loopEndMs: Long? = null
 ) {
     val progress: Float
         get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
@@ -94,6 +98,14 @@ class PlaybackEngine {
 
     @Volatile private var playing = false
     @Volatile private var seekToMs: Long? = null
+
+    /** The A-B loop; the playback thread's alone, asked through [loopRequest]. */
+    private val loop = AbLoop(AudioDevices.FORMAT.sampleRate.toInt())
+
+    private enum class LoopRequest { OPEN, CLOSE, CLEAR }
+
+    /** What the A-B button asked for, picked up by the playback thread on its next pass. */
+    @Volatile private var loopRequest: LoopRequest? = null
     @Volatile private var outputsDirty = false
     @Volatile private var framesPlayed = 0L
 
@@ -226,6 +238,24 @@ class PlaybackEngine {
         _status.update { it.copy(playing = false) }
     }
 
+    /** A, at what is being heard now: from here on it is recorded, ready to go round. */
+    fun openLoop() {
+        loopRequest = LoopRequest.OPEN
+        wake()
+    }
+
+    /** B, at what is being heard now, and straight back to A, round and round. */
+    fun closeLoop() {
+        loopRequest = LoopRequest.CLOSE
+        wake()
+    }
+
+    /** No more loop; playback carries on from wherever in it it had got to. */
+    fun clearLoop() {
+        loopRequest = LoopRequest.CLEAR
+        wake()
+    }
+
     /** Gets the playback thread out of a wait, so it sees a pause, a seek or a stop at once. */
     private fun wake() {
         worker?.let { LockSupport.unpark(it) }
@@ -260,6 +290,7 @@ class PlaybackEngine {
             var duration = if (current.durationMs > 0) current.durationMs else -1L
 
             resetMeter()
+            loop.clear()
             while (!session.stopped) {
                 if (outputsDirty) {
                     outputsDirty = false
@@ -270,6 +301,19 @@ class PlaybackEngine {
                 // moves the position straight away rather than on resume.
                 seekToMs?.let { target ->
                     seekToMs = null
+                    // Inside a loop playing from memory, a jump stays there: the
+                    // file isn't touched. Anywhere else ends the loop.
+                    if (loop.seek(target * rate / 1000)) {
+                        lines.forEach { runCatching { it.flush() } }
+                        pacing.restart()
+                        framesPlayed = loop.positionFrame
+                        publishPosition(duration, rate, force = true)
+                        return@let
+                    }
+                    if (loop.state != AbLoop.State.OFF) {
+                        loop.clear()
+                        publishLoop(rate)
+                    }
                     // A jump abandons any overlap in progress: the song that was
                     // being faded in is no longer the one about to arrive.
                     runCatching { incoming?.close() }
@@ -290,6 +334,33 @@ class PlaybackEngine {
                     lines.forEach { runCatching { it.flush() } }
                     pacing.restart()
                     publishPosition(duration, rate, force = true)
+                }
+
+                loopRequest?.let { request ->
+                    loopRequest = null
+                    // What is being heard, which trails what was decoded by what is
+                    // still queued - in source frames, so at the song's own speed.
+                    val heard = (framesPlayed - queuedFrames() * effects.speed).toLong().coerceAtLeast(0L)
+                    when (request) {
+                        LoopRequest.OPEN -> loop.open(heard)
+                        LoopRequest.CLOSE -> if (loop.close(heard)) {
+                            if (loop.fromMemory) {
+                                // B is now: what was queued after it isn't heard; A is next.
+                                lines.forEach { runCatching { it.flush() } }
+                                pacing.restart()
+                            } else {
+                                seekToMs = loop.startFrame * 1000 / rate
+                            }
+                        }
+                        LoopRequest.CLEAR -> {
+                            val wasRound = loop.state == AbLoop.State.LOOPING && loop.fromMemory
+                            val at = framesPlayed
+                            loop.clear()
+                            // The file is still at B: it carries on from where the loop had got to.
+                            if (wasRound) seekToMs = at * 1000 / rate
+                        }
+                    }
+                    publishLoop(rate)
                 }
 
                 if (!playing) {
@@ -322,7 +393,16 @@ class PlaybackEngine {
                     }
                 }
 
-                val raw = decoder?.read(BLOCK_FRAMES)
+                val roundTheLoop = loop.state == AbLoop.State.LOOPING && loop.fromMemory
+                if (roundTheLoop) framesPlayed = loop.positionFrame
+                val raw = if (roundTheLoop) loop.next(BLOCK_FRAMES) else decoder?.read(BLOCK_FRAMES)
+                // Kept as read, before any gain or effect touches it, for A to start from.
+                if (raw != null && !roundTheLoop) loop.heard(raw, framesPlayed + raw.size / 2)
+                if (raw == null && loop.state != AbLoop.State.OFF) {
+                    // The song ended with only A set: there is nothing to go round.
+                    loop.clear()
+                    publishLoop(rate)
+                }
                 if (raw == null) {
                     // This song is done. Carry on into the next one on this
                     // same thread, through these same open lines: closing them
@@ -396,6 +476,10 @@ class PlaybackEngine {
                 val length = toBytes(processed)
                 writeToAll(pcmScratch, length)
                 publishPosition(duration, rate)
+                // A loop too long to keep in memory goes back to A the slow way.
+                if (loop.state == AbLoop.State.LOOPING && !loop.fromMemory && framesPlayed >= loop.endFrame && seekToMs == null) {
+                    seekToMs = loop.startFrame * 1000 / rate
+                }
             }
             // The last song's last moments are still in the lines: they play out
             // here, on this thread, rather than being cut by whatever stops it next.
@@ -452,6 +536,12 @@ class PlaybackEngine {
             // near the start, and made every pause look like the end of a track.
             durationMs = if (duration > 0) duration else 0L
         ) }
+    }
+
+    private fun publishLoop(rate: Int) {
+        val start = loop.startFrame.takeIf { loop.state != AbLoop.State.OFF }?.let { it * 1000 / rate }
+        val end = loop.endFrame.takeIf { loop.state == AbLoop.State.LOOPING }?.let { it * 1000 / rate }
+        _status.update { it.copy(loopStartMs = start, loopEndMs = end) }
     }
 
     /** Frames handed to the primary line that it has not played yet. */
