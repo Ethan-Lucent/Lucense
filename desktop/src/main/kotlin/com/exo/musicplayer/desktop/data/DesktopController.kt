@@ -139,55 +139,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
-/** How the library table is ordered. */
-enum class SortMode(val label: String) {
-    ARTIST("Artist"),
-    TITLE("Title"),
-    ALBUM("Album"),
-    DURATION("Duration"),
-    PLAYS("Times played"),
-    LISTEN_TIME("Time listened"),
-    ADDED("Date added"),
-    RATING("Rating"),
-    YEAR("Year")
-}
-
-/** Progress of one of the bulk tools. */
-data class BulkJob(
-    val label: String = "",
-    val running: Boolean = false,
-    val total: Int = 0,
-    val done: Int = 0,
-    val updated: Int = 0,
-    val alreadyHad: Int = 0,
-    val skipped: Int = 0,
-    val failed: Int = 0,
-    val current: String = "",
-    val finishedNote: String? = null
-) {
-    val progress: Float get() = if (total > 0) done.toFloat() / total else 0f
-}
-
-/** One line in the download window's history. */
-data class DownloadEntry(
-    val id: Long,
-    val target: String,
-    var display: String,
-    var percent: Float = 0f,
-    var status: String = "Queued",
-    var done: Boolean = false,
-    var failed: Boolean = false,
-    var files: List<File> = emptyList(),
-    var note: String? = null,
-    /** The song it was asked for by name, when it was: kept so a retry asks the same way. */
-    val song: YouTubeLinkFinder.Wanted? = null,
-    /** A playlist's songs that weren't downloaded, for "Retry the missed". */
-    var missed: Int = 0
-)
-
-/** A duplicate set as the desktop sees it. */
-data class DesktopDuplicateGroup(val keep: DesktopTrack, val remove: List<DesktopTrack>)
-
 /**
  * Everything the Windows UI reads and acts on.
  *
@@ -5571,23 +5522,11 @@ class DesktopController(parent: CoroutineScope) {
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
 }
 
-/** How the Identify box interprets what you typed. */
-enum class IdentifyMode(val label: String, val placeholder: String) {
-    NAME("Name", "Artist and title, or whatever you can remember"),
-    LYRICS("Lyrics", "A line you remember, however roughly"),
-    LINK("Link", "TikTok, Instagram, YouTube, SoundCloud link"),
-    YOUTUBE("YouTube", "Search YouTube — anything, not just music")
-}
-
-/** The four bulk tools, and the mark each one records so reruns can skip. */
 /** How many songs the cover and tag tools look up at once. */
 private const val SONGS_AT_ONCE = 5
 
 /** Files listened to at once for duplicates by sound: decoding is the slow part. */
 private const val PRINTS_AT_ONCE = 6
-
-/** What the progress panel calls a Fix run. */
-const val FIX_LABEL = "Fix"
 
 /**
  * How long one song's tag lookup may take. Every track goes through the tag
@@ -5599,49 +5538,6 @@ private const val TAGS_GIVE_UP_MS = 10_000L
 /** How long the sleep timer spends fading out before it pauses. */
 private const val SLEEP_FADE_MS = 30_000L
 
-/** A song's effects as one line of text, for the database. */
-private fun encodeFx(fx: DesktopFxState): String =
-    listOf(
-        fx.speed,
-        fx.pitchSemitones,
-        if (fx.reverbEnabled) 1f else 0f,
-        fx.reverbMix,
-        fx.reverbDecay,
-        if (fx.eqEnabled) 1f else 0f,
-        fx.drive,
-        fx.lofi,
-        fx.tremolo,
-        fx.rotate,
-        fx.echo
-    ).joinToString(",") + "|" + fx.eqGains.joinToString(",")
-
-/**
- * Null for anything that isn't the numbers and ten bands written above: six
- * before distortion was added, seven since.
- */
-private fun decodeFx(text: String): DesktopFxState? {
-    val halves = text.split('|')
-    if (halves.size != 2) return null
-    val head = halves[0].split(',').mapNotNull { it.toFloatOrNull() }
-    val gains = halves[1].split(',').mapNotNull { it.toFloatOrNull() }
-    // Six numbers before distortion, seven with it, eleven with lo-fi, tremolo, 8D and echo.
-    if (head.size !in 6..11 || gains.size != 10) return null
-    return DesktopFxState(
-        speed = head[0],
-        pitchSemitones = head[1],
-        reverbEnabled = head[2] > 0.5f,
-        reverbMix = head[3],
-        reverbDecay = head[4],
-        eqEnabled = head[5] > 0.5f,
-        eqGains = gains,
-        drive = head.getOrElse(6) { 0f }.coerceIn(0f, 1f),
-        lofi = head.getOrElse(7) { 0f }.coerceIn(0f, 1f),
-        tremolo = head.getOrElse(8) { 0f }.coerceIn(0f, 1f),
-        rotate = head.getOrElse(9) { 0f }.coerceIn(0f, 1f),
-        echo = head.getOrElse(10) { 0f }.coerceIn(0f, 1f)
-    )
-}
-
 /** How far into a song the previous button restarts it rather than going back. */
 private const val RESTART_WINDOW_MS = 4_000L
 
@@ -5649,33 +5545,6 @@ private const val RESTART_WINDOW_MS = 4_000L
 private val PLAYABLE = setOf(
     "mp3", "m4a", "mp4", "m4b", "flac", "wav", "ogg", "oga", "opus", "aac", "wma", "aiff", "aif"
 )
-
-enum class BulkKind(val label: String, val markColumn: String?) {
-    COVERS("Covers", "artCheckedAt"),
-    TAGS("Names & tags", "identifiedAt"),
-    LYRICS("Lyrics", "lyricsCheckedAt"),
-    IDENTIFY("Identify by sound", "fingerprintedAt"),
-
-    /** Marks nothing: it only ever visits files that are still broken. */
-    REPAIR("Mass fix Telegram songs", null),
-
-    /** Marks nothing either: a measured track is skipped by its own reckoning. */
-    LEVELS("Level volumes", null),
-
-    /** Marks nothing: it only ever visits songs that are still missing something. */
-    FOLDERS("Names from folders", null)
-}
-
-/** What happens when a track, or the queue, runs out. */
-enum class RepeatMode(val label: String) {
-    OFF("Repeat off"),
-    ALL("Repeat all"),
-    ONE("Repeat one");
-
-    companion object {
-        fun fromName(name: String?): RepeatMode = entries.firstOrNull { it.name == name } ?: OFF
-    }
-}
 
 /** What to send a catalogue when looking a track up. */
 private val DesktopTrack.searchQuery: String
