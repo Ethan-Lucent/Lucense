@@ -113,8 +113,9 @@ data class DesktopFxState(
      * Maps a shared preset onto this platform's reverb model.
      *
      * The shared definition gives room size abstractly, 0..1; here that becomes
-     * the Schroeder decay coefficient, whose useful range stops at 0.94 because
-     * beyond that the comb filters ring rather than decay.
+     * the Room size slider's 0.40..0.94, which the reverb maps onto its own
+     * feedback (Reverb.feedbackFor). Kept as it was, so saved settings and the
+     * presets still mean the same size of room.
      */
     fun applying(preset: EffectPreset) = copy(
         speed = preset.speed,
@@ -400,12 +401,13 @@ private fun EffectsControls(
         Readout(
             "Room size",
             "${(fx.reverbDecay * 100).roundToInt()}%",
-            if (fx.reverbDecay > 0.9f) "close to ringing" else "how long it takes to die away"
+            if (fx.reverbDecay > 0.9f) "an enormous space" else "how long it takes to die away"
         )
         Slider(
             value = fx.reverbDecay,
             onValueChange = { onFx(fx.copy(reverbDecay = it)) },
-            // Above ~0.95 the comb filters stop decaying and ring indefinitely.
+            // The range the presets' room sizes are mapped onto; the reverb turns it
+            // into a tail of under a second at the bottom to about six at the top.
             valueRange = 0.4f..0.94f,
             colors = sliderColours()
         )
