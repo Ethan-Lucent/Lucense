@@ -74,6 +74,8 @@ import java.io.File
 import javax.swing.JFileChooser
 import javax.swing.UIManager
 import javax.swing.filechooser.FileNameExtensionFilter
+import com.exo.musicplayer.desktop.system.LogFile
+import com.exo.musicplayer.desktop.data.AppDirs
 
 /**
  * Windows entry point.
@@ -86,6 +88,8 @@ fun main(args: Array<String>) {
     // Already running - perhaps out of sight in the tray: that one takes the
     // files and comes to the front, and this one goes.
     if (SingleInstance.handOver(args)) return
+    // Before anything has anything to say: from here on it is kept in a file too.
+    LogFile.install(File(AppDirs.root, "logs"), AppVersion.name)
     lucense(args)
 }
 

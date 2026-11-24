@@ -59,6 +59,7 @@ import kotlin.math.roundToInt
 import java.awt.Desktop
 import java.io.File
 import java.net.URI
+import com.exo.musicplayer.desktop.system.LogFile
 
 /** The Settings page's tabs, in the order they are shown. */
 enum class SettingsTab(val label: String) {
@@ -725,6 +726,24 @@ private fun AboutSettings(controller: DesktopController) {
                 )
             }
             GhostButton("Open") { openFolder(AppDirs.root) }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Logs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.TextDim
+                )
+                Text(
+                    (LogFile.folder ?: File(AppDirs.root, "logs")).absolutePath,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Palette.TextFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            GhostButton("Open") { openFolder(LogFile.folder ?: File(AppDirs.root, "logs")) }
         }
     }
 }
