@@ -76,6 +76,7 @@ import javax.swing.UIManager
 import javax.swing.filechooser.FileNameExtensionFilter
 import com.exo.musicplayer.desktop.system.LogFile
 import com.exo.musicplayer.desktop.data.AppDirs
+import com.exo.musicplayer.desktop.ui.collectNowPlaying
 
 /**
  * Windows entry point.
@@ -114,7 +115,7 @@ private fun lucense(args: Array<String>) = application {
     // behind something else - or closed, when Lucense is kept in the tray.
     // Not every desktop has a tray; Windows always does.
     if (controller.trayAvailable) {
-        val playing by controller.engine.status.collectAsState()
+        val playing by controller.engine.collectNowPlaying()
         Tray(
             icon = remember { trayIcon() },
             tooltip = playing.track?.let { "${it.title} — Lucense" } ?: "Lucense",
@@ -320,7 +321,7 @@ private fun trayIcon(): Painter {
 
 @Composable
 private fun AppHost(controller: DesktopController) {
-    val status by controller.engine.status.collectAsState()
+    val status by controller.engine.collectNowPlaying()
 
     // Shown once per launch, not on every navigation — a splash that reappears
     // when you switch tabs is an interruption, not an introduction.

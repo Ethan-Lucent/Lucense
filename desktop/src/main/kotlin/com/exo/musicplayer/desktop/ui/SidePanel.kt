@@ -72,6 +72,7 @@ import com.exo.musicplayer.util.asDuration
 import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import androidx.compose.runtime.derivedStateOf
 
 /** Which side panel is showing, if any. */
 enum class SidePanelKind { EFFECTS, OUTPUT, LYRICS, QUEUE }
@@ -151,9 +152,9 @@ fun SidePanel(
     narrow: Boolean = false,
     controller: DesktopController,
     track: DesktopTrack?,
-    positionMs: Long,
     onClose: () -> Unit
 ) {
+    val nowPlaying by controller.engine.collectNowPlaying()
     Box(
         Modifier
             .width(
@@ -234,7 +235,7 @@ fun SidePanel(
                 EffectsControls(
                     fx = controller.fx,
                     spectrum = controller.engine.spectrum,
-                    playing = controller.engine.status.value.playing,
+                    playing = nowPlaying.playing,
                     onFx = { controller.fx = it }
                 )
                 Spacer(Modifier.height(18.dp))
@@ -261,7 +262,7 @@ fun SidePanel(
                 controller.selectedOutputs,
                 controller::toggleOutput
             )
-            SidePanelKind.LYRICS -> LyricsPanel(controller, track, positionMs)
+            SidePanelKind.LYRICS -> LyricsAtPosition(controller, track)
         }
         }
     }
@@ -570,6 +571,13 @@ private fun TickRow(labels: List<String>) {
     }
 }
 
+/** The lyrics, the one part of the panel that follows the position. */
+@Composable
+private fun LyricsAtPosition(controller: DesktopController, track: DesktopTrack?) {
+    val positionMs by controller.engine.collectPositionMs()
+    LyricsPanel(controller, track, positionMs)
+}
+
 /** Sketch of the reverb tail, so "room size" means something before you hear it. */
 @Composable
 private fun DecayCurve(decay: Float, mix: Float) {
@@ -833,8 +841,9 @@ private fun dbAt(y: Float, height: Int): Float {
  */
 @Composable
 private fun QueueList(controller: DesktopController) {
-    val status by controller.engine.status.collectAsState()
-    val coming = controller.upNext
+    val status by controller.engine.collectNowPlaying()
+    // Worked out again when the song or the queue changes, not at every look.
+    val coming by remember(status.track) { derivedStateOf { controller.upNext } }
     when {
         status.track == null -> Hint("Nothing is playing. Start a song and whatever follows it shows up here.")
 
@@ -858,7 +867,7 @@ private fun QueueList(controller: DesktopController) {
             }
             Spacer(Modifier.height(8.dp))
             LazyColumn(Modifier.fillMaxSize()) {
-                itemsIndexed(coming) { index, track ->
+                itemsIndexed(coming, key = { index, track -> "$index:${track.file.absolutePath}" }) { index, track ->
                     Row(
                         Modifier
                             .fillMaxWidth()

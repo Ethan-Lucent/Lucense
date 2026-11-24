@@ -121,7 +121,8 @@ fun DesktopApp(
         showSettings = false
     }
 
-    val status by controller.engine.status.collectAsState()
+    // What is playing, not where in it: see collectNowPlaying.
+    val status by controller.engine.collectNowPlaying()
     val visible = controller.visibleTracks
 
     // Starting the library's own music stops a preview, rather than playing over it.
@@ -318,7 +319,6 @@ fun DesktopApp(
                         narrow = !roomy,
                         controller = controller,
                         track = status.track,
-                        positionMs = status.positionMs,
                         onClose = { controller.sidePanel = null }
                     )
                 }
@@ -329,7 +329,6 @@ fun DesktopApp(
                 controller = controller,
                 track = status.track,
                 isPlaying = status.playing,
-                positionMs = status.positionMs,
                 durationMs = status.durationMs,
                 onOpenGroup = openGroup,
                 loopStartMs = status.loopStartMs,

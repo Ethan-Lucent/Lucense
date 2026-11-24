@@ -71,13 +71,14 @@ import androidx.compose.foundation.border
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.delay
 
 @Composable
 internal fun TransportBar(
     controller: DesktopController,
     track: DesktopTrack?,
     isPlaying: Boolean,
-    positionMs: Long,
     durationMs: Long,
     onOpenGroup: (CollectionKind, String) -> Unit,
     loopStartMs: Long? = null,
@@ -209,51 +210,24 @@ internal fun TransportBar(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                // Where the drag currently is, or null when nobody is dragging.
-                // The clock on the left follows this while it is set, so the
-                // number and the bar say the same thing mid-drag.
-                var scrubbing by remember { mutableStateOf<Float?>(null) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        (scrubbing?.let { (it * durationMs).toLong() } ?: positionMs).asDuration(),
-                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
-                        color = if (scrubbing != null) Palette.Accent else Palette.TextFaint,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.width(38.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Box(Modifier.width(if (narrow) 200.dp else 330.dp)) {
-                        LineSlider(
-                            value = if (durationMs > 0) {
-                                (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-                            } else {
-                                0f
-                            },
-                            enabled = track != null,
-                            onPreview = { scrubbing = it },
-                            onSet = { controller.seekFraction(it) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        LoopMarks(loopStartMs, loopEndMs, durationMs, Modifier.matchParentSize())
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        durationMs.asDuration(),
-                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
-                        color = Palette.TextFaint,
-                        textAlign = TextAlign.Start,
-                        modifier = Modifier.width(38.dp)
-                    )
-                }
+                SeekRow(controller, track, durationMs, narrow, loopStartMs, loopEndMs)
             }
 
             Spacer(Modifier.weight(1f))
 
             var sleepMenu by remember { mutableStateOf(false) }
+            // Counted down on its own: minutes left are the clock's, and nothing
+            // else redraws the bar for the clock.
+            val sleepLeft by produceState(controller.sleepMinutesLeft, controller.sleepEndsAt) {
+                while (true) {
+                    value = controller.sleepMinutesLeft
+                    delay(15_000)
+                }
+            }
             if (!tight) Box {
                 BarToggle(
                     icon = Icons.Default.Bedtime,
-                    label = controller.sleepMinutesLeft?.let { "$it min" }
+                    label = sleepLeft?.let { "$it min" }
                         ?: if (controller.stopAfterTrack) "End of song" else "Sleep",
                     active = controller.sleepEndsAt != null || controller.stopAfterTrack,
                     highlight = false
@@ -469,5 +443,58 @@ private fun LoopMarks(loopStartMs: Long?, loopEndMs: Long?, durationMs: Long, mo
             drawLine(accent, Offset(b, middle - half), Offset(b, middle + half), strokeWidth = 2.dp.toPx())
         }
         drawLine(accent, Offset(a, middle - half), Offset(a, middle + half), strokeWidth = 2.dp.toPx())
+    }
+}
+
+/**
+ * The seek line and its two clocks - the one part of the bar that follows the
+ * position, which changes four times a second. It reads the position itself, so
+ * only this recomposes as a song plays, not the bar around it.
+ */
+@Composable
+private fun SeekRow(
+    controller: DesktopController,
+    track: DesktopTrack?,
+    durationMs: Long,
+    narrow: Boolean,
+    loopStartMs: Long?,
+    loopEndMs: Long?
+) {
+    val positionMs by controller.engine.collectPositionMs()
+    // Where the drag currently is, or null when nobody is dragging.
+    // The clock on the left follows this while it is set, so the
+    // number and the bar say the same thing mid-drag.
+    var scrubbing by remember { mutableStateOf<Float?>(null) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            (scrubbing?.let { (it * durationMs).toLong() } ?: positionMs).asDuration(),
+            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+            color = if (scrubbing != null) Palette.Accent else Palette.TextFaint,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(38.dp)
+        )
+        Spacer(Modifier.width(4.dp))
+        Box(Modifier.width(if (narrow) 200.dp else 330.dp)) {
+            LineSlider(
+                value = if (durationMs > 0) {
+                    (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                } else {
+                    0f
+                },
+                enabled = track != null,
+                onPreview = { scrubbing = it },
+                onSet = { controller.seekFraction(it) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            LoopMarks(loopStartMs, loopEndMs, durationMs, Modifier.matchParentSize())
+        }
+        Spacer(Modifier.width(4.dp))
+        Text(
+            durationMs.asDuration(),
+            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+            color = Palette.TextFaint,
+            textAlign = TextAlign.Start,
+            modifier = Modifier.width(38.dp)
+        )
     }
 }
