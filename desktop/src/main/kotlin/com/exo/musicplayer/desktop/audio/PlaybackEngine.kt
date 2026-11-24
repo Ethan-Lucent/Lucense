@@ -8,6 +8,7 @@ import kotlin.math.sin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.concurrent.locks.LockSupport
 import javax.sound.sampled.SourceDataLine
 import kotlin.concurrent.thread
@@ -56,6 +57,14 @@ class PlaybackEngine {
 
     /** The bass as it reaches the speakers, for the reactive backgrounds. */
     val beat = BeatTap()
+
+    init {
+        // The resampler's shared window, ready before the first 48 kHz song or
+        // pitch change needs it, so the playback thread never works it out.
+        thread(name = "lucense-resampler-warm-up", isDaemon = true, priority = Thread.MIN_PRIORITY) {
+            StreamingResampler.warmUp()
+        }
+    }
 
     /**
      * What this track is multiplied by so it sits at the same loudness as the
@@ -182,7 +191,7 @@ class PlaybackEngine {
             return
         }
         playing = !playing
-        _status.value = _status.value.copy(playing = playing)
+        _status.update { it.copy(playing = playing) }
         wake()
     }
 
@@ -196,7 +205,7 @@ class PlaybackEngine {
         // it. Until then everything watching the position would show the old
         // spot and then jump forward, which on the seek bar read as it bugging
         // in and out.
-        _status.value = _status.value.copy(positionMs = target)
+        _status.update { it.copy(positionMs = target) }
         wake()
     }
 
@@ -214,7 +223,7 @@ class PlaybackEngine {
         }
         worker = null
         closeLines()
-        _status.value = _status.value.copy(playing = false)
+        _status.update { it.copy(playing = false) }
     }
 
     /** Gets the playback thread out of a wait, so it sees a pause, a seek or a stop at once. */
@@ -240,10 +249,10 @@ class PlaybackEngine {
             decoder = Decoder.open(current.file, startFrame)
             reopenLines()
             if (lines.isEmpty()) {
-                _status.value = _status.value.copy(
+                _status.update { it.copy(
                     playing = false,
                     error = "No audio output could be opened."
-                )
+                ) }
                 return
             }
 
@@ -267,6 +276,9 @@ class PlaybackEngine {
                     incoming = null
                     incomingTrack = null
                     decoder = seek(decoder, current, target * rate / 1000)
+                    // A long skip forward can outlast stop()'s wait. If this session
+                    // ended meanwhile, the position and the lines are no longer its own.
+                    if (session.stopped) return@let
                     framesPlayed = decoder?.positionFrames ?: 0L
                     effects.reset()
                     spectrum.reset()
@@ -389,15 +401,15 @@ class PlaybackEngine {
             // here, on this thread, rather than being cut by whatever stops it next.
             if (reachedEnd && !session.stopped) lines.forEach { runCatching { it.drain() } }
         } catch (t: Throwable) {
-            _status.value = _status.value.copy(
+            _status.update { it.copy(
                 playing = false,
                 error = t.message ?: "Playback failed."
-            )
+            ) }
         } finally {
             runCatching { decoder?.close() }
             runCatching { incoming?.close() }
             if (!session.stopped) {
-                _status.value = _status.value.copy(playing = false, ended = reachedEnd)
+                _status.update { it.copy(playing = false, ended = reachedEnd) }
             }
         }
     }
@@ -433,13 +445,13 @@ class PlaybackEngine {
         val slot = positionMs / PUBLISH_INTERVAL_MS
         if (!force && slot == lastPublished) return
         lastPublished = slot
-        _status.value = _status.value.copy(
+        _status.update { it.copy(
             positionMs = positionMs,
             // Unknown stays unknown. Reporting the position as the length made
             // the seek bar scale against a moving target, so its middle landed
             // near the start, and made every pause look like the end of a track.
             durationMs = if (duration > 0) duration else 0L
-        )
+        ) }
     }
 
     /** Frames handed to the primary line that it has not played yet. */
