@@ -170,7 +170,7 @@ class DesktopController(parent: CoroutineScope) {
 
     val settings = DesktopSettings()
     val store = DesktopStore(AppDirs.database)
-    val engine = PlaybackEngine()
+    val engine = PlaybackEngine(AudioDevices.playbackRate(settings.outputRate))
 
     /** The playing song read ahead, for the Waves background. */
     val songGraph = SongGraph(engine)

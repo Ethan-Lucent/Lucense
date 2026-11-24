@@ -213,6 +213,11 @@ class DesktopSettings {
         set(value) = prefs.putBoolean(KEY_DISCORD_COVER, value)
 
     /** Milliseconds one song overlaps the next; 0 is a clean handover. */
+    /** The rate playback runs at, 0 for the sound server's own; see AudioDevices.playbackRate. */
+    var outputRate: Int
+        get() = prefs.getInt(KEY_OUTPUT_RATE, 0)
+        set(value) = prefs.putInt(KEY_OUTPUT_RATE, value)
+
     var crossfadeMs: Int
         get() = prefs.getInt(KEY_CROSSFADE, 0)
         set(value) = prefs.putInt(KEY_CROSSFADE, value.coerceIn(0, 12_000))
@@ -394,6 +399,7 @@ class DesktopSettings {
         const val KEY_DISCORD_COVER = "discord_cover"
         const val KEY_NOTIFY_SONGS = "notify_songs"
         const val KEY_CROSSFADE = "crossfade_ms"
+        const val KEY_OUTPUT_RATE = "output_rate"
         const val KEY_LIBRARY_SORT = "library_sort"
         const val KEY_ALBUM_SORT = "album_sort"
         const val KEY_ARTIST_SORT = "artist_sort"

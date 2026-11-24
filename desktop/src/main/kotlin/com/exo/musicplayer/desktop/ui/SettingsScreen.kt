@@ -423,11 +423,35 @@ private fun GameDuckingSettings(controller: DesktopController) {
     }
 }
 
+/** 44100 as "44.1 kHz", 48000 as "48 kHz". */
+private fun kiloHertz(rate: Int): String = if (rate % 1000 == 0) "${rate / 1000} kHz" else "${rate / 1000.0} kHz"
+
 @Composable
 private fun PlaybackOptionsSettings(controller: DesktopController) {
     Panel(Modifier.fillMaxWidth()) {
         SectionTitle("Playback")
         Spacer(Modifier.height(10.dp))
+        // Read once, as the engine starts: the whole chain - decoding, effects,
+        // the device - is built for one rate.
+        var outputRate by remember { mutableStateOf(controller.settings.outputRate) }
+        Text("Output sample rate", style = MaterialTheme.typography.titleMedium, color = Palette.Text)
+        Spacer(Modifier.height(6.dp))
+        SegmentedRow(
+            options = listOf(0, 44_100, 48_000, 96_000),
+            selected = outputRate,
+            label = { if (it == 0) "Automatic" else kiloHertz(it) },
+            onSelect = {
+                outputRate = it
+                controller.settings.outputRate = it
+            }
+        )
+        Spacer(Modifier.height(4.dp))
+        Hint(
+            "Now ${kiloHertz(controller.engine.rate)}" +
+                (if (outputRate == 0) ", the sound system's own rate, so it converts nothing." else ".") +
+                " A change takes effect when Lucense next starts."
+        )
+        Spacer(Modifier.height(14.dp))
         CheckRow(
             label = "Even out volumes",
             checked = controller.levelling,

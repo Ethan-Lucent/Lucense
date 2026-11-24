@@ -46,7 +46,13 @@ data class PlaybackStatus(
  * effect slider is heard within tens of milliseconds, rather than after a whole
  * line of audio already made with the old setting.
  */
-class PlaybackEngine {
+class PlaybackEngine(
+    /** Frames a second for everything this plays; see [AudioDevices.playbackRate]. */
+    val rate: Int = AudioDevices.playbackRate()
+) {
+
+    /** What is written to the devices. */
+    private val format = AudioDevices.format(rate)
 
     /** Position updates coarser than this are invisible on screen. */
     private val PUBLISH_INTERVAL_MS = 250L
@@ -54,7 +60,7 @@ class PlaybackEngine {
     private val _status = MutableStateFlow(PlaybackStatus())
     val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
 
-    val effects = EffectChain()
+    val effects = EffectChain(rate)
 
     /** Band levels for the mixer display; idle unless something is showing it. */
     val spectrum = SpectrumAnalyser()
@@ -94,13 +100,13 @@ class PlaybackEngine {
     @Volatile private var session: Session? = null
 
     /** How full the line is kept; on Linux, short, so effects are heard at once. */
-    private val pacing = OutputPacing.forThisSystem(AudioDevices.FORMAT.sampleRate.toInt())
+    private val pacing = OutputPacing.forThisSystem(rate)
 
     @Volatile private var playing = false
     @Volatile private var seekToMs: Long? = null
 
     /** The A-B loop; the playback thread's alone, asked through [loopRequest]. */
-    private val loop = AbLoop(AudioDevices.FORMAT.sampleRate.toInt())
+    private val loop = AbLoop(rate)
 
     private enum class LoopRequest { OPEN, CLOSE, CLEAR }
 
@@ -158,7 +164,7 @@ class PlaybackEngine {
         session = current
         playing = true
         val from = startMs.coerceAtLeast(0L)
-        framesPlayed = from * AudioDevices.FORMAT.sampleRate.toInt() / 1000
+        framesPlayed = from * rate / 1000
         pendingStartMs = 0L
         lastPublished = -1
         effects.reset()
@@ -276,7 +282,7 @@ class PlaybackEngine {
         // finished and playback merely ending here.
         var reachedEnd = false
         try {
-            decoder = Decoder.open(current.file, startFrame)
+            decoder = Decoder.open(current.file, startFrame, rate)
             reopenLines()
             if (lines.isEmpty()) {
                 _status.update { it.copy(
@@ -286,7 +292,6 @@ class PlaybackEngine {
                 return
             }
 
-            val rate = AudioDevices.FORMAT.sampleRate.toInt()
             var duration = if (current.durationMs > 0) current.durationMs else -1L
 
             resetMeter()
@@ -383,7 +388,7 @@ class PlaybackEngine {
                     val leftMs = duration - framesPlayed * 1000 / rate
                     val follow = upNext
                     if (follow != null && leftMs in 1..overlap) {
-                        val opened = runCatching { Decoder.open(follow.file, 0L) }.getOrNull()
+                        val opened = runCatching { Decoder.open(follow.file, 0L, rate) }.getOrNull()
                         if (opened != null) {
                             incoming = opened
                             incomingTrack = follow
@@ -412,7 +417,7 @@ class PlaybackEngine {
                     if (handover == null) {
                         val follow = upNext
                         if (follow != null) {
-                            handover = runCatching { Decoder.open(follow.file, 0L) }.getOrNull()
+                            handover = runCatching { Decoder.open(follow.file, 0L, rate) }.getOrNull()
                             started = follow
                         }
                     }
@@ -512,7 +517,7 @@ class PlaybackEngine {
             return current
         }
         runCatching { current?.close() }
-        return Decoder.open(track.file, frame)
+        return Decoder.open(track.file, frame, rate)
     }
 
     /**
@@ -573,7 +578,7 @@ class PlaybackEngine {
         // The primary write blocks, which is what paces playback when the line is kept full.
         runCatching { current[0].write(bytes, 0, length) }
         if (current.size == 1) return
-        val frameSize = AudioDevices.FORMAT.frameSize
+        val frameSize = format.frameSize
         // Paced, a mirror is held to what the primary has queued: left to fill
         // its whole buffer it would play that much later than the primary, an
         // echo between the two devices. Kept full, both are full, as before.
@@ -658,7 +663,7 @@ class PlaybackEngine {
     private fun reopenLines() {
         closeLines()
         val targets = outputs.ifEmpty { listOf(DesktopAudioOutput("System default", null)) }
-        lines = targets.mapNotNull { AudioDevices.openLine(it) }
+        lines = targets.mapNotNull { AudioDevices.openLine(it, format) }
         lines.firstOrNull()?.let { pacing.fit(it.bufferSize / it.format.frameSize, BLOCK_FRAMES) }
     }
 

@@ -512,11 +512,11 @@ class Equalizer(private val sampleRate: Double = 44_100.0) {
  * requested tempo. So `resample(p)` followed by `stretch(speed / p)` yields
  * tempo = speed and pitch = p, with either adjustable on its own.
  */
-class EffectChain {
+class EffectChain(private val sampleRate: Int = 44_100) {
 
-    val stretcher = TimeStretcher()
-    val reverb = Reverb()
-    val equalizer = Equalizer()
+    val stretcher = TimeStretcher(sampleRate)
+    val reverb = Reverb(sampleRate)
+    val equalizer = Equalizer(sampleRate.toDouble())
 
     /**
      * Continuous across buffers. The pitch shift used to resample each buffer on
@@ -567,7 +567,7 @@ class EffectChain {
         equalizer.process(buffer)
         // After the EQ, so a boosted band drives harder, and before the
         // reverb, so the room is of the distorted sound, as with an amp.
-        character.process(buffer, 2, 44_100)
+        character.process(buffer, 2, sampleRate)
         reverb.process(buffer)
 
         if (volume !in 0.999f..1.001f) {
