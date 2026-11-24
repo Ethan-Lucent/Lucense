@@ -127,6 +127,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+import com.exo.musicplayer.desktop.system.SongNotifications
 
 /**
  * Everything the Windows UI reads and acts on.
@@ -1645,6 +1646,21 @@ class DesktopController(parent: CoroutineScope) {
         }
     })
 
+    private val songNotifications: SongNotifications? = if (Platform.isLinux) SongNotifications() else null
+
+    private val notifySongsState = mutableStateOf(settings.notifySongs)
+
+    /** Whether a song starting shows as a desktop notification; Linux only. */
+    var notifySongs: Boolean
+        get() = notifySongsState.value
+        set(value) {
+            notifySongsState.value = value
+            settings.notifySongs = value
+        }
+
+    /** The song last announced, so each is announced once. */
+    private var notifiedKey: String? = null
+
     /** Tells the Linux desktop what is playing, for its media controls; nothing elsewhere. */
     private fun tellDesktopPlayer() {
         val bus = mpris ?: return
@@ -1670,6 +1686,12 @@ class DesktopController(parent: CoroutineScope) {
             ),
             status.positionMs
         )
+        // Once per song, while it plays - not for the one put back at startup - and
+        // once its cover has been looked for: null is "not yet", blank is "none".
+        if (notifySongs && track != null && key != null && key != notifiedKey && status.playing && cover != null) {
+            notifiedKey = key
+            songNotifications?.show(track.title, track.displayArtist, cover.ifBlank { null })
+        }
         if (track != null && key != null && cover == null) {
             desktopCovers[key] = ""
             scope.launch {
@@ -4559,6 +4581,7 @@ class DesktopController(parent: CoroutineScope) {
         rememberPlace()
         mediaKeys.unbind()
         hotkey.unbind()
+        songNotifications?.close()
         // The song playing as the app closes counts as listened to as well.
         // closeListenEvent writes from a coroutine, which never got to run
         // before the store below was closed; this writes it first.

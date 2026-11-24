@@ -202,6 +202,11 @@ class DesktopSettings {
         set(value) = prefs.put(KEY_REACTIVE_MODE, value)
 
     /** The Discord application this shows up as; blank turns it off. */
+    /** Whether a song starting shows as a desktop notification (Linux). */
+    var notifySongs: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFY_SONGS, false)
+        set(value) = prefs.putBoolean(KEY_NOTIFY_SONGS, value)
+
     /** Whether the song's own cover is shown on Discord rather than the app icon. */
     var discordCover: Boolean
         get() = prefs.getBoolean(KEY_DISCORD_COVER, true)
@@ -387,6 +392,7 @@ class DesktopSettings {
         const val KEY_MEDIA_KEYS = "media_keys"
         const val KEY_LEVELLING = "levelling"
         const val KEY_DISCORD_COVER = "discord_cover"
+        const val KEY_NOTIFY_SONGS = "notify_songs"
         const val KEY_CROSSFADE = "crossfade_ms"
         const val KEY_LIBRARY_SORT = "library_sort"
         const val KEY_ALBUM_SORT = "album_sort"

@@ -119,6 +119,7 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
                         ProxySettings(controller)
                     }
                     SettingsTab.INTEGRATIONS -> {
+                        if (Platform.isLinux) DesktopNotificationSettings(controller)
                         SharingSettings(controller)
                         WeatherSettings(controller)
                     }
@@ -588,6 +589,20 @@ private fun LyricsAndArtworkSettings(controller: DesktopController) {
             Hint("With every service off, songs keep the covers they have, and new ones come only from files and tags.")
         }
 
+    }
+}
+
+@Composable
+private fun DesktopNotificationSettings(controller: DesktopController) {
+    Panel(Modifier.fillMaxWidth()) {
+        SectionTitle("Desktop")
+        Spacer(Modifier.height(10.dp))
+        CheckRow(
+            label = "Show each song as it starts",
+            checked = controller.notifySongs,
+            note = "A notification with the song and its cover, for when Lucense is behind other windows. " +
+                "The next song replaces it rather than piling up."
+        ) { controller.notifySongs = it }
     }
 }
 

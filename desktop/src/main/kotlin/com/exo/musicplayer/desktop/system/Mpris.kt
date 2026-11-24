@@ -89,24 +89,6 @@ class Mpris(private val actions: Actions) {
         }.onFailure { problem = it }.onSuccess { problem = null }.isSuccess
     }
 
-    /**
-     * The session bus. Its address may name an abstract socket (dbus-launch
-     * and dbus-run-session give one), which Java's own Unix sockets can't
-     * open; a systemd desktop's bus is also at /run/user/<uid>/bus, which they can.
-     */
-    private fun sessionBus(): DBusConnection {
-        val address = System.getenv("DBUS_SESSION_BUS_ADDRESS").orEmpty()
-        if ("abstract=" in address || address.isBlank()) {
-            val uid = runCatching {
-                java.io.File("/proc/self/status").readLines().first { it.startsWith("Uid:") }.split('\t', ' ').filter { it.isNotEmpty() }[1]
-            }.getOrNull()
-            val socket = uid?.let { java.io.File("/run/user/$it/bus") }
-            if (socket != null && socket.exists()) {
-                return DBusConnectionBuilder.forAddress("unix:path=" + socket.path).build()
-            }
-        }
-        return DBusConnectionBuilder.forSessionBus().build()
-    }
 
     @Synchronized
     fun stop() {
@@ -276,6 +258,25 @@ class Mpris(private val actions: Actions) {
     }
 
     companion object {
+        /**
+         * The session bus. Its address may name an abstract socket (dbus-launch
+         * and dbus-run-session give one), which Java's own Unix sockets can't
+         * open; a systemd desktop's bus is also at /run/user/<uid>/bus, which they can.
+         */
+        fun sessionBus(): DBusConnection {
+            val address = System.getenv("DBUS_SESSION_BUS_ADDRESS").orEmpty()
+            if ("abstract=" in address || address.isBlank()) {
+                val uid = runCatching {
+                    java.io.File("/proc/self/status").readLines().first { it.startsWith("Uid:") }.split('\t', ' ').filter { it.isNotEmpty() }[1]
+                }.getOrNull()
+                val socket = uid?.let { java.io.File("/run/user/$it/bus") }
+                if (socket != null && socket.exists()) {
+                    return DBusConnectionBuilder.forAddress("unix:path=" + socket.path).build()
+                }
+            }
+            return DBusConnectionBuilder.forSessionBus().build()
+        }
+
         const val BUS_NAME = "org.mpris.MediaPlayer2.lucense"
         const val PATH = "/org/mpris/MediaPlayer2"
         const val ROOT = "org.mpris.MediaPlayer2"

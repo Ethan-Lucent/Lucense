@@ -25,6 +25,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import com.exo.musicplayer.desktop.system.SongNotifications
+import org.freedesktop.dbus.types.UInt32
+import org.freedesktop.dbus.types.Variant
 
 /**
  * The Linux build's own pieces, against the real thing where there is one:
@@ -58,6 +61,38 @@ class LinuxTest {
         val xdg = System.getenv("XDG_DATA_HOME")
         assertNotNull(xdg, "the test task sets XDG_DATA_HOME")
         assertEquals(File(xdg, "Lucense").absolutePath, AppDirs.root.absolutePath)
+    }
+
+    @Test
+    fun `a song starting shows as a desktop notification`() {
+        linux()
+        assumeTrue(System.getenv("DBUS_SESSION_BUS_ADDRESS") != null, "needs a session bus")
+        val received = Collections.synchronizedList(mutableListOf<String>())
+        val server = Mpris.sessionBus()
+        try {
+            assumeTrue(runCatching { server.requestBusName(SongNotifications.SERVICE) }.isSuccess, "a notification service already runs on this bus")
+            server.exportObject(SongNotifications.PATH, object : SongNotifications.Notifications {
+                override fun Notify(
+                    appName: String, replacesId: UInt32, appIcon: String, summary: String, body: String,
+                    actions: List<String>, hints: Map<String, Variant<*>>, expireTimeout: Int
+                ): UInt32 {
+                    received += "$summary|$body|${replacesId.toLong()}|${hints["image-path"]?.value}"
+                    return UInt32(41)
+                }
+                override fun getObjectPath() = SongNotifications.PATH
+            })
+            val notifications = SongNotifications()
+            notifications.show("Faded", "Alan Walker", "file:///tmp/cover.png")
+            eventually("the first arrives") { received.size >= 1 }
+            notifications.show("Alone", "Alan Walker", null)
+            eventually("the second arrives") { received.size >= 2 }
+            // The second replaces the first rather than piling up under it.
+            assertEquals(listOf("Faded|Alan Walker|0|file:///tmp/cover.png", "Alone|Alan Walker|41|null"), received.toList())
+            notifications.close()
+        } finally {
+            runCatching { server.releaseBusName(SongNotifications.SERVICE) }
+            server.close()
+        }
     }
 
     @Test
