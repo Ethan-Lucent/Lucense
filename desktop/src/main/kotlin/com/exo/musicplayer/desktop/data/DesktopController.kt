@@ -121,6 +121,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -624,30 +625,45 @@ class DesktopController(parent: CoroutineScope) {
     /** Whether the folders are being watched, for the Settings line that says so. */
     val watchingFolders: Boolean get() = watcher.watching
 
+    /** The scan running now, if any; [rescanWanted] when another was asked for meanwhile. */
+    private var scanJob: Job? = null
+    private var rescanWanted = false
+
     fun rescan() {
-        // The download folder always counts, so anything downloaded is in the
-        // library whether or not that folder was ever added by hand.
-        val roots = (folders + settings.downloadDir)
-            .map(::File)
-            .filter { it.isDirectory }
-            .distinctBy { it.absoluteFile.normalize().path.lowercase() }
-        if (roots.isEmpty()) {
-            tracks = emptyList()
-            scanning = false
-            return
-        }
+        // Decided on the scope's own thread, so two requests can't both start a
+        // scan. Two at once each wrote the library when done - the older possibly
+        // last - and the first to finish said scanning had stopped while the other
+        // went on. One asked for during a scan runs straight after it, with the
+        // folders as they are by then, rather than cancelling it, which a stream
+        // of downloads could otherwise do for as long as it lasted.
         scope.launch {
-            scanning = true
-            scanned = 0
-            val found = FolderLibrary.scan(roots) { count, name ->
-                // Called from the IO dispatcher; only cheap value writes here.
-                scanned = count
-                scanningName = name
+            if (scanJob?.isActive == true) {
+                rescanWanted = true
+                return@launch
             }
-            tracks = found
-            scanning = false
-            refreshAggregates()
-            restorePlace()
+            scanJob = coroutineContext[Job]
+            do {
+                rescanWanted = false
+                // The download folder always counts, so anything downloaded is in the
+                // library whether or not that folder was ever added by hand.
+                val roots = roots()
+                if (roots.isEmpty()) {
+                    tracks = emptyList()
+                    scanning = false
+                    break
+                }
+                scanning = true
+                scanned = 0
+                val found = FolderLibrary.scan(roots) { count, name ->
+                    // Called from the IO dispatcher; only cheap value writes here.
+                    scanned = count
+                    scanningName = name
+                }
+                tracks = found
+                scanning = false
+                refreshAggregates()
+                restorePlace()
+            } while (rescanWanted)
         }
     }
 
@@ -4169,10 +4185,21 @@ class DesktopController(parent: CoroutineScope) {
         discordNote = presence.note
     }
 
+    /** Waiting for typing in the Discord ID box to stop; see [changeDiscordId]. */
+    private var discordIdApply: Job? = null
+
     fun changeDiscordId(id: String) {
         discordId = id.trim()
         settings.discordId = discordId
-        applyDiscord()
+        // Restarting the presence waits for Discord's thread on this one - up to
+        // a second and a half - and does the handshake again. Done for every key
+        // typed, it froze the window as each character went in; it now happens
+        // once, when typing stops.
+        discordIdApply?.cancel()
+        discordIdApply = scope.launch {
+            delay(DISCORD_ID_SETTLE_MS)
+            applyDiscord()
+        }
     }
 
     private fun applyDiscord() {
@@ -4498,14 +4525,33 @@ class DesktopController(parent: CoroutineScope) {
         rememberPlace()
         mediaKeys.unbind()
         hotkey.unbind()
-        closeListenEvent()
+        // The song playing as the app closes counts as listened to as well.
+        // closeListenEvent writes from a coroutine, which never got to run
+        // before the store below was closed; this writes it first.
+        closeListenEventNow()
         engine.release()
         store.close()
+    }
+
+    /**
+     * [closeListenEvent] for when nothing will run afterwards: quitting. Only a
+     * play whose row is already written can be finished - one that started a
+     * moment ago has no row yet, and nothing worth keeping.
+     */
+    private fun closeListenEventNow() {
+        val open = openPlay ?: return
+        openPlay = null
+        if (!open.rowId.isCompleted) return
+        val id = runCatching { runBlocking { open.rowId.await() } }.getOrNull() ?: return
+        if (id >= 0) runCatching { store.updateListened(id, engine.status.value.positionMs) }
     }
 
     private companion object {
         /** Songs in a row that wouldn't stream before a list stops trying. */
         const val STREAM_FAILURES_TO_STOP = 3
+
+        /** How long the Discord ID box has to sit still before Discord is told. */
+        const val DISCORD_ID_SETTLE_MS = 700L
 
         /** Covers kept as files for the Linux desktop's media controls. */
         const val DESKTOP_COVERS_KEPT = 20
