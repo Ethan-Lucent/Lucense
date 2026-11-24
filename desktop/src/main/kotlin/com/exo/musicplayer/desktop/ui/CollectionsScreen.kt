@@ -51,6 +51,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -120,7 +121,8 @@ fun CollectionScreen(
     // An album by its name or who it's by; an artist by name. What is shown is what picking and merging act on.
     val groups = remember(all, query) { if (query.isBlank()) all else all.filter { NameSearch.matches(query, it.name, it.artist) } }
     val picked = if (controller.pickedKind == kind) controller.pickedGroups else emptySet()
-    val grid = remember(kind) { LazyGridState() }
+    // Saved rather than only remembered, so it comes back where it was after another page.
+    val grid = rememberSaveable(kind, saver = LazyGridState.Saver) { LazyGridState() }
 
     // A pick belongs to the page it was made on.
     DisposableEffect(kind) { onDispose { controller.clearPicked() } }

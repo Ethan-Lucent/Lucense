@@ -45,6 +45,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -109,6 +110,8 @@ fun DesktopApp(
     var showSettings by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
     var playlistTargets by remember { mutableStateOf<List<DesktopTrack>>(emptyList()) }
+    // What each page saved when it was last left - see the page switch below.
+    val pages = rememberSaveableStateHolder()
 
     // An album's or an artist's page, on whichever of Albums and Artists it belongs:
     // from its card, or from its name in the song list or in the bar below.
@@ -239,56 +242,61 @@ fun DesktopApp(
                             )
                         }
 
-                        when {
-                            showSettings -> SettingsScreen(controller, onChooseFolder)
-                            destination == Destination.LIBRARY ->
-                                LibraryPane(
-                                    controller = controller,
-                                    tracks = visible,
-                                    nowPlaying = status.track,
-                                    onAddFolder = { onChooseFolder()?.let(controller::addFolder) },
-                                    onAddToPlaylist = { items ->
-                                        playlistTargets = items
-                                        controller.refreshPlaylists()
-                                        dialog = DialogKind.ADD_TO_PLAYLIST
-                                    },
-                                    onIdentify = { track ->
-                                        controller.identifyTarget = track
-                                        destination = Destination.IDENTIFY
-                                        controller.identifyFile(track)
-                                    },
-                                    onOpenGroup = openGroup
-                                )
-                            destination == Destination.ALBUMS || destination == Destination.ARTISTS ->
-                                CollectionScreen(
-                                    controller = controller,
-                                    kind = if (destination == Destination.ALBUMS) {
-                                        CollectionKind.ALBUMS
-                                    } else {
-                                        CollectionKind.ARTISTS
-                                    },
-                                    onMerge = { dialog = DialogKind.MERGE },
-                                    onClearDuplicates = { within ->
-                                        controller.findDuplicates(within)
-                                        dialog = DialogKind.DUPLICATES
-                                    },
-                                    onOpenGroup = openGroup,
-                                    onAddToPlaylist = { items ->
-                                        playlistTargets = items
-                                        controller.refreshPlaylists()
-                                        dialog = DialogKind.ADD_TO_PLAYLIST
-                                    }
-                                )
-                            destination == Destination.PLAYLISTS ->
-                                PlaylistsScreen(controller, onPickPlaylistFile)
-                            destination == Destination.DISCOVER ->
-                                DiscoverScreen(controller, onOpenSignIn = { destination = Destination.DOWNLOAD }) { destination = Destination.IDENTIFY }
-                            destination == Destination.IDENTIFY ->
-                                IdentifyScreen(controller, onChooseMedia)
-                            destination == Destination.MOODS -> MoodsScreen(controller)
-                            destination == Destination.STATS -> StatsScreen(controller)
-                            destination == Destination.DOWNLOAD ->
-                                DownloadScreen(controller, onChooseFolder)
+                        // Each page keeps its scroll position, and whatever else it saves,
+                        // while another is shown. Leaving a page used to throw that away,
+                        // so the song list was back at the top on every return to it.
+                        pages.SaveableStateProvider(if (showSettings) "settings" else destination.name) {
+                            when {
+                                showSettings -> SettingsScreen(controller, onChooseFolder)
+                                destination == Destination.LIBRARY ->
+                                    LibraryPane(
+                                        controller = controller,
+                                        tracks = visible,
+                                        nowPlaying = status.track,
+                                        onAddFolder = { onChooseFolder()?.let(controller::addFolder) },
+                                        onAddToPlaylist = { items ->
+                                            playlistTargets = items
+                                            controller.refreshPlaylists()
+                                            dialog = DialogKind.ADD_TO_PLAYLIST
+                                        },
+                                        onIdentify = { track ->
+                                            controller.identifyTarget = track
+                                            destination = Destination.IDENTIFY
+                                            controller.identifyFile(track)
+                                        },
+                                        onOpenGroup = openGroup
+                                    )
+                                destination == Destination.ALBUMS || destination == Destination.ARTISTS ->
+                                    CollectionScreen(
+                                        controller = controller,
+                                        kind = if (destination == Destination.ALBUMS) {
+                                            CollectionKind.ALBUMS
+                                        } else {
+                                            CollectionKind.ARTISTS
+                                        },
+                                        onMerge = { dialog = DialogKind.MERGE },
+                                        onClearDuplicates = { within ->
+                                            controller.findDuplicates(within)
+                                            dialog = DialogKind.DUPLICATES
+                                        },
+                                        onOpenGroup = openGroup,
+                                        onAddToPlaylist = { items ->
+                                            playlistTargets = items
+                                            controller.refreshPlaylists()
+                                            dialog = DialogKind.ADD_TO_PLAYLIST
+                                        }
+                                    )
+                                destination == Destination.PLAYLISTS ->
+                                    PlaylistsScreen(controller, onPickPlaylistFile)
+                                destination == Destination.DISCOVER ->
+                                    DiscoverScreen(controller, onOpenSignIn = { destination = Destination.DOWNLOAD }) { destination = Destination.IDENTIFY }
+                                destination == Destination.IDENTIFY ->
+                                    IdentifyScreen(controller, onChooseMedia)
+                                destination == Destination.MOODS -> MoodsScreen(controller)
+                                destination == Destination.STATS -> StatsScreen(controller)
+                                destination == Destination.DOWNLOAD ->
+                                    DownloadScreen(controller, onChooseFolder)
+                            }
                         }
                     }
                     }
