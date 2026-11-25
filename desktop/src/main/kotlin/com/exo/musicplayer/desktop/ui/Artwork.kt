@@ -25,6 +25,11 @@ import androidx.compose.ui.unit.dp
 import com.exo.musicplayer.desktop.data.Covers
 import com.exo.musicplayer.desktop.data.Thumbnails
 import com.exo.musicplayer.desktop.library.DesktopTrack
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import androidx.compose.ui.graphics.graphicsLayer
 
 /**
  * Cover art for one track.
@@ -42,18 +47,31 @@ fun Artwork(
     corner: Dp = 5.dp,
     modifier: Modifier = Modifier
 ) {
+    val key = track?.file?.absolutePath
     val cached = track?.let { Covers.cached(it) }
-    var bitmap by remember(track?.file?.absolutePath) { mutableStateOf(cached) }
+    var bitmap by remember(key) { mutableStateOf(cached) }
+    // Already decoded, it is there at once; decoded later, it fades in over the
+    // placeholder instead of popping into a row in the middle of a scroll.
+    val shown = remember(key) { Animatable(if (cached != null) 1f else 0f) }
 
-    // Keyed on the revision too, so a cover fetched while this is on screen
-    // replaces the placeholder. A cover already showing is never reloaded.
-    LaunchedEffect(track?.file?.absolutePath, Covers.revision) {
-        if (track != null && bitmap == null && !Covers.knownMissing(track)) {
-            bitmap = Covers.load(track)
+    LaunchedEffect(key) {
+        if (track == null) return@LaunchedEffect
+        if (bitmap == null && !Covers.knownMissing(track)) bitmap = Covers.load(track)
+        // A cover fetched while this is on screen still arrives. Watched here,
+        // in this row's own effect: read during composition, every fetch used to
+        // recompose every row on screen, the ones with covers included.
+        if (bitmap == null) {
+            snapshotFlow { Covers.revision }.drop(1).first {
+                if (!Covers.knownMissing(track)) bitmap = Covers.load(track)
+                bitmap != null
+            }
         }
     }
+    LaunchedEffect(bitmap != null) {
+        if (bitmap != null) shown.animateTo(1f, Motion.change())
+    }
 
-    ArtworkFrame(bitmap, size, corner, modifier)
+    ArtworkFrame(bitmap, size, corner, modifier) { shown.value }
 }
 
 @Composable
@@ -61,7 +79,9 @@ private fun ArtworkFrame(
     bitmap: ImageBitmap?,
     size: Dp,
     corner: Dp,
-    modifier: Modifier
+    modifier: Modifier,
+    /** How far the picture has faded in, read while drawing - no recomposition per frame. */
+    shown: () -> Float = { 1f }
 ) {
     Box(
         modifier
@@ -70,19 +90,21 @@ private fun ArtworkFrame(
             .background(Palette.Hover),
         contentAlignment = Alignment.Center
     ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
+        // The placeholder stays underneath, so a cover fading in fades in over it.
+        if (bitmap == null || shown() < 1f) {
             Icon(
                 Icons.Default.Album,
                 null,
                 Modifier.size(size * 0.42f),
                 tint = Palette.TextFaint
+            )
+        }
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = shown() }
             )
         }
     }
