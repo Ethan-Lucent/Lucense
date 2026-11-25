@@ -304,6 +304,21 @@ file said before anything touched it.
 
 ### Around the app
 
+- **A-B repeat.** The A-B button beside repeat (or L): A where you are, B a
+  little later, and that stretch plays round and round until you press it
+  again, seamlessly - it's kept in memory rather than re-read from the file -
+  with A and B marked on the seek line.
+- **Settings in tabs**: Library, Playback, Appearance, Downloads, Integrations
+  and About, each keeping its place.
+- **Output sample rate** (Settings, Playback). Automatic plays at the sound
+  system's own rate - 48 kHz on PipeWire - so it converts nothing.
+- **On Linux**: the desktop's media controls get shuffle and repeat as well
+  (MPRIS), and Settings, Integrations can show each song as a desktop
+  notification as it starts.
+- **A log file.** What Lucense notes as it runs is kept in `logs/lucense.log`
+  in its data folder - Settings, About, Logs opens it - for when something
+  goes wrong.
+
 - **Keyboard shortcuts** (Windows and Linux). They work whenever you're not
   typing in a box, including right after clicking a button: the space bar always
   plays or pauses, and never presses the button you last clicked. In a box, every
@@ -319,7 +334,9 @@ file said before anything touched it.
   | J | jump the list to the song playing |
   | M | mute, or put the volume back |
   | S · R | shuffle · repeat (all, one, off) |
-  | Ctrl + A · Esc | select everything in view · clear the selection, or back from an album's page |
+  | L | loop: A here, then B here and round, then off |
+  | Ctrl + F | the page's search box, from anywhere |
+  | Ctrl + A · Esc | select everything in view · clear the selection, or back from an album's page; in a text box, Esc leaves it |
 
   Your keyboard's or headset's **media keys** work even while Lucense is in the
   background.
