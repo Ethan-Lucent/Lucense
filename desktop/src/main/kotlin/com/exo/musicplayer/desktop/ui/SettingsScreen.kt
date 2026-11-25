@@ -60,6 +60,7 @@ import java.awt.Desktop
 import java.io.File
 import java.net.URI
 import com.exo.musicplayer.desktop.system.LogFile
+import androidx.compose.animation.Crossfade
 
 /** The Settings page's tabs, in the order they are shown. */
 enum class SettingsTab(val label: String) {
@@ -97,7 +98,8 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
                 onSelect = { tab = it }
             )
         }
-        tabs.SaveableStateProvider(tab.name) {
+        Crossfade(tab, Modifier.fillMaxSize(), Motion.change(), label = "settings tab") { shown ->
+        tabs.SaveableStateProvider(shown.name) {
             Column(
                 Modifier
                     .fillMaxSize()
@@ -105,7 +107,7 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
                     .padding(horizontal = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                when (tab) {
+                when (shown) {
                     SettingsTab.LIBRARY -> {
                         MusicFoldersSettings(controller, onChooseFolder)
                         LyricsAndArtworkSettings(controller)
@@ -129,6 +131,7 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
                 }
                 Spacer(Modifier.height(14.dp))
             }
+        }
         }
     }
 }

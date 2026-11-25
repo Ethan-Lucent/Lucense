@@ -58,6 +58,12 @@ import com.exo.musicplayer.desktop.data.DesktopController
 import com.exo.musicplayer.desktop.library.DesktopTrack
 import kotlinx.coroutines.delay
 import java.io.File
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 
 enum class Destination(val label: String, val icon: ImageVector) {
     LIBRARY("Library", Icons.Default.LibraryMusic),
@@ -246,10 +252,12 @@ fun DesktopApp(
                         // Each page keeps its scroll position, and whatever else it saves,
                         // while another is shown. Leaving a page used to throw that away,
                         // so the song list was back at the top on every return to it.
-                        pages.SaveableStateProvider(if (showSettings) "settings" else destination.name) {
+                        Crossfade(if (showSettings) "settings" else destination.name, Modifier.fillMaxSize(), Motion.change(), label = "page") { page ->
+                            val at = Destination.entries.firstOrNull { it.name == page }
+                            pages.SaveableStateProvider(page) {
                             when {
-                                showSettings -> SettingsScreen(controller, onChooseFolder)
-                                destination == Destination.LIBRARY ->
+                                page == "settings" -> SettingsScreen(controller, onChooseFolder)
+                                at == Destination.LIBRARY ->
                                     LibraryPane(
                                         controller = controller,
                                         tracks = visible,
@@ -267,10 +275,10 @@ fun DesktopApp(
                                         },
                                         onOpenGroup = openGroup
                                     )
-                                destination == Destination.ALBUMS || destination == Destination.ARTISTS ->
+                                at == Destination.ALBUMS || at == Destination.ARTISTS ->
                                     CollectionScreen(
                                         controller = controller,
-                                        kind = if (destination == Destination.ALBUMS) {
+                                        kind = if (at == Destination.ALBUMS) {
                                             CollectionKind.ALBUMS
                                         } else {
                                             CollectionKind.ARTISTS
@@ -287,17 +295,18 @@ fun DesktopApp(
                                             dialog = DialogKind.ADD_TO_PLAYLIST
                                         }
                                     )
-                                destination == Destination.PLAYLISTS ->
+                                at == Destination.PLAYLISTS ->
                                     PlaylistsScreen(controller, onPickPlaylistFile)
-                                destination == Destination.DISCOVER ->
+                                at == Destination.DISCOVER ->
                                     DiscoverScreen(controller, onOpenSignIn = { destination = Destination.DOWNLOAD }) { destination = Destination.IDENTIFY }
-                                destination == Destination.IDENTIFY ->
+                                at == Destination.IDENTIFY ->
                                     IdentifyScreen(controller, onChooseMedia)
-                                destination == Destination.MOODS -> MoodsScreen(controller)
-                                destination == Destination.STATS -> StatsScreen(controller)
-                                destination == Destination.DOWNLOAD ->
+                                at == Destination.MOODS -> MoodsScreen(controller)
+                                at == Destination.STATS -> StatsScreen(controller)
+                                at == Destination.DOWNLOAD ->
                                     DownloadScreen(controller, onChooseFolder)
                             }
+                        }
                         }
                     }
                     }
@@ -308,19 +317,28 @@ fun DesktopApp(
                 }
 
                 val panel = controller.sidePanel
-                if (panel != null) {
+                // The last panel open, so a closing one slides away showing what it was.
+                val lastPanel = remember { arrayOfNulls<SidePanelKind>(1) }
+                if (panel != null) lastPanel[0] = panel
+                AnimatedVisibility(
+                    visible = panel != null,
+                    enter = expandHorizontally(Motion.slide(), expandFrom = Alignment.Start) + fadeIn(Motion.slide()),
+                    exit = shrinkHorizontally(Motion.slide(), shrinkTowards = Alignment.Start) + fadeOut(Motion.slide())
+                ) {
+                    Row {
                     if (glass) {
                         Spacer(Modifier.width(Glass.GAP))
                     } else {
                         Box(Modifier.width(1.dp).fillMaxHeight().background(Palette.Line))
                     }
                     SidePanel(
-                        kind = panel,
+                        kind = panel ?: lastPanel[0] ?: SidePanelKind.EFFECTS,
                         narrow = !roomy,
                         controller = controller,
                         track = status.track,
                         onClose = { controller.sidePanel = null }
                     )
+                    }
                 }
             }
 

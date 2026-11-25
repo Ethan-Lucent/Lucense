@@ -73,6 +73,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
+import androidx.compose.animation.Crossfade
 
 @Composable
 internal fun TransportBar(
@@ -175,12 +176,14 @@ internal fun TransportBar(
                             .clickable { controller.togglePlay() },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            if (isPlaying) "Pause" else "Play",
-                            Modifier.size(18.dp),
-                            tint = Palette.OnAccent
-                        )
+                        Crossfade(isPlaying, animationSpec = Motion.quick(), label = "play") { playing ->
+                            Icon(
+                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                if (playing) "Pause" else "Play",
+                                Modifier.size(18.dp),
+                                tint = Palette.OnAccent
+                            )
+                        }
                     }
                     Spacer(Modifier.width(4.dp))
                     IconButton(onClick = { controller.next() }) {

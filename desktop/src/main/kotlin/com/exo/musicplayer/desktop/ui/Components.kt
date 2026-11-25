@@ -81,6 +81,7 @@ import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequesterModifierNode
 import androidx.compose.ui.focus.requestFocus
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.animation.animateColorAsState
 
 /**
  * The small pieces every screen shares.
@@ -105,11 +106,15 @@ fun AccentButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val background = when {
-        !enabled -> Palette.Hover
-        hovered -> Palette.Accent
-        else -> Palette.Button
-    }
+    val background by animateColorAsState(
+        when {
+            !enabled -> Palette.Hover
+            hovered -> Palette.Accent
+            else -> Palette.Button
+        },
+        Motion.quick(),
+        label = "button"
+    )
     val shape = if (Glass.on) RoundedCornerShape(50) else RoundedCornerShape(7.dp)
     Row(
         Modifier
@@ -131,11 +136,15 @@ fun AccentButton(
             .padding(horizontal = 16.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val tint = when {
-            !enabled -> Palette.TextFaint
-            hovered -> Palette.OnAccent
-            else -> Palette.OnButton
-        }
+        val tint by animateColorAsState(
+            when {
+                !enabled -> Palette.TextFaint
+                hovered -> Palette.OnAccent
+                else -> Palette.OnButton
+            },
+            Motion.quick(),
+            label = "button text"
+        )
         if (icon != null) {
             Icon(icon, null, Modifier.size(15.dp), tint = tint)
             Spacer(Modifier.width(8.dp))
@@ -205,7 +214,7 @@ fun IconGhostButton(label: String, icon: ImageVector, enabled: Boolean = true, o
                     } else {
                         Modifier
                             .clip(RoundedCornerShape(7.dp))
-                            .background(if (hovered && enabled) Palette.Hover else Color.Transparent)
+                            .background(hoverFill(hovered && enabled))
                             .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
                     }
                 )
@@ -236,7 +245,7 @@ fun GhostButton(
                 } else {
                     Modifier
                         .clip(RoundedCornerShape(7.dp))
-                        .background(if (hovered && enabled) Palette.Hover else Color.Transparent)
+                        .background(hoverFill(hovered && enabled))
                         .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
                 }
             )
@@ -821,3 +830,8 @@ private val SLIDER_TRACK = 4.dp
 private val SLIDER_REST_RADIUS = 4.5.dp
 private const val SLIDER_CATCH_UP = 0.025f
 private const val SLIDER_HOLD_MS = 900L
+
+/** A hover's fill, easing in and out rather than snapping. */
+@Composable
+private fun hoverFill(on: Boolean): Color =
+    animateColorAsState(if (on) Palette.Hover else Color.Transparent, Motion.quick(), label = "hover").value

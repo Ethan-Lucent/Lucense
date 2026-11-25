@@ -154,7 +154,9 @@ private fun lucense(args: Array<String>) = application {
         )
     }
 
-    val mainWindow = rememberWindowState(width = 1280.dp, height = 820.dp)
+    // -Dlucense.window=900x600 starts at another size: for checking how a small window looks.
+    val startSize = System.getProperty("lucense.window")?.split('x')?.mapNotNull { it.trim().toIntOrNull() }?.takeIf { it.size == 2 }
+    val mainWindow = rememberWindowState(width = (startSize?.get(0) ?: 1280).dp, height = (startSize?.get(1) ?: 820).dp)
     val shortcuts = remember(controller) { WindowShortcuts(controller.shortcutActions()) }
     // The other windows - the mini player, the lyrics - get the playing keys only.
     val playbackKeys = remember(controller) { WindowShortcuts(controller.shortcutActions(), playbackOnly = true) }
