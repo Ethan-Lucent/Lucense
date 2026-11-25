@@ -157,7 +157,7 @@ fun CollectionScreen(
         ) {
             // As in the library: the sort chips scroll, the buttons keep their width.
             Row(
-                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                Modifier.weight(1f).fadingHorizontalScroll(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 SegmentedRow(

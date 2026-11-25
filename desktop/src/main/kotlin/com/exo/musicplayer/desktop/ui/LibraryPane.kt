@@ -455,7 +455,7 @@ private fun SelectionBar(controller: DesktopController, visible: List<DesktopTra
         // outside it where they keep their own width. The click hints that used
         // to live here are in the shortcut list on the / key now.
         Row(
-            Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            Modifier.weight(1f).fadingHorizontalScroll(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             GhostButton("Play", icon = Icons.Default.PlayArrow) {

@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.exo.musicplayer.desktop.ui
 
 import com.exo.musicplayer.data.audio.CharacterEffect
@@ -73,6 +75,7 @@ import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.layout.FlowRow
 
 /** Which side panel is showing, if any. */
 enum class SidePanelKind { EFFECTS, OUTPUT, LYRICS, QUEUE }
@@ -290,11 +293,11 @@ private fun EffectsControls(
     // to fit would make them unreadable rather than compact.
     val presets = EffectPreset.entries
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        presets.chunked(3).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                row.forEach { preset ->
-                    Preset(preset.label, fx.matches(preset)) { onFx(fx.applying(preset)) }
-                }
+        // As many to a line as fit, each label on one line: three to a row put
+        // "Slowed + reverb" on two lines in a narrow panel.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            presets.forEach { preset ->
+                Preset(preset.label, fx.matches(preset)) { onFx(fx.applying(preset)) }
             }
         }
     }
@@ -729,6 +732,8 @@ private fun Preset(label: String, selected: Boolean, onClick: () -> Unit) {
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            softWrap = false,
             fontWeight = FontWeight.SemiBold,
             color = if (selected) Palette.Base else Palette.TextDim
         )

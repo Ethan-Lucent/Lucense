@@ -175,7 +175,7 @@ internal fun ContentHeader(
                 Modifier
                     .fillMaxWidth()
                     .padding(start = 24.dp, end = 24.dp, bottom = 10.dp)
-                    .horizontalScroll(rememberScrollState()),
+                    .fadingHorizontalScroll(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -206,7 +206,7 @@ internal fun ContentHeader(
                 // instead, and the buttons sit outside the weighted region so
                 // they keep their intrinsic width whatever else happens.
                 Row(
-                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    Modifier.weight(1f).fadingHorizontalScroll(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     SegmentedRow(
