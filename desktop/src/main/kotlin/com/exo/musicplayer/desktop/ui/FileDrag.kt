@@ -24,6 +24,7 @@ import java.awt.event.InputEvent
 import java.awt.event.MouseEvent
 import java.io.File
 import javax.swing.SwingUtilities
+import com.exo.musicplayer.desktop.system.SandboxShare
 
 /**
  * Songs dragged out of Lucense as their files: onto the desktop or into a
@@ -67,7 +68,8 @@ object DragOut {
         )
         val gesture = DragGestureEvent(Gesture(component, press), DnDConstants.ACTION_COPY, at, listOf(press))
         active = true
-        runCatching { start(gesture, FileList(files)) }.onFailure { active = false }
+        // On Linux from where a sandboxed app (a Flatpak Telegram) can read them: see SandboxShare.
+        runCatching { start(gesture, FileList(SandboxShare.offer(files))) }.onFailure { active = false }
     }
 
     /** What AWT needs to have recognised a drag: the drag itself was recognised by Compose. */
