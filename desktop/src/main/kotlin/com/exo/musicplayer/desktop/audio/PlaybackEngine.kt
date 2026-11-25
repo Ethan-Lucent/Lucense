@@ -315,9 +315,19 @@ class PlaybackEngine(
                         publishPosition(duration, rate, force = true)
                         return@let
                     }
-                    if (loop.state != AbLoop.State.OFF) {
-                        loop.clear()
-                        publishLoop(rate)
+                    val targetFrame = target * rate / 1000
+                    when {
+                        // A stays where it was set; only its recording is broken.
+                        loop.state == AbLoop.State.RECORDING -> loop.interrupt()
+                        // Outside the loop ends it. With a twentieth of a second to spare at
+                        // each end: going back to A by seeking rounds A to a millisecond, which
+                        // can land a few frames before it.
+                        loop.state == AbLoop.State.LOOPING &&
+                            (targetFrame < loop.startFrame - rate / 20 || targetFrame >= loop.endFrame + rate / 20) -> {
+                            loop.clear()
+                            publishLoop(rate)
+                        }
+                        else -> Unit
                     }
                     // A jump abandons any overlap in progress: the song that was
                     // being faded in is no longer the one about to arrive.
@@ -329,6 +339,8 @@ class PlaybackEngine(
                     // ended meanwhile, the position and the lines are no longer its own.
                     if (session.stopped) return@let
                     framesPlayed = decoder?.positionFrames ?: 0L
+                    // Back at A, for a loop not yet in memory: record this pass round.
+                    if (loop.state == AbLoop.State.LOOPING && !loop.fromMemory && framesPlayed <= loop.startFrame + rate / 20) loop.learn()
                     effects.reset()
                     spectrum.reset()
                     resetMeter()

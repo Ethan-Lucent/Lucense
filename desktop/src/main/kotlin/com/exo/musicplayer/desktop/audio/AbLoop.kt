@@ -15,8 +15,13 @@ package com.exo.musicplayer.desktop.audio
  * kept ([HISTORY_SECONDS]), and setting A starts the recording from the heard
  * moment, out of that.
  *
- * A loop longer than [MAX_SECONDS] isn't kept in memory - [fromMemory] is false -
- * and the engine goes back to A by seeking instead, gap and all.
+ * Moving about the song after setting A keeps A ([interrupt]): only the recording
+ * stops being one piece. B then may even come before A - they swap. A loop not
+ * recorded whole goes back to A by seeking once, and [learn]s the stretch on that
+ * pass; from the turn after, it plays from memory like any other.
+ *
+ * A loop longer than [MAX_SECONDS] isn't kept in memory - [fromMemory] stays
+ * false - and the engine goes back to A by seeking every time, gap and all.
  *
  * Frames are interleaved stereo floats, as they come from [Decoder], before any
  * gain or effect. Used from the playback thread only.
@@ -56,6 +61,9 @@ internal class AbLoop(private val rate: Int = 44_100) {
     /** Where in the loop playback is, when [State.LOOPING] from memory. */
     private var at = 0
 
+    /** Recording the stretch on a pass from A, for a loop that couldn't be recorded on the way to B. */
+    private var learning = false
+
     /** The source frame playback is at inside the loop. */
     val positionFrame: Long get() = startFrame + at
 
@@ -73,6 +81,34 @@ internal class AbLoop(private val rate: Int = 44_100) {
         historyFill = minOf(historyFrames, historyFill + frames)
         historyEnd = endFrameOfBlock
         if (state == State.RECORDING) record(block, 0, frames)
+        if (learning) {
+            record(block, 0, frames)
+            val length = endFrame - startFrame
+            if (overflowed) {
+                learning = false
+            } else if (cacheFrames >= length) {
+                // Round once: from the next turn the stretch comes from memory.
+                cacheFrames = length.toInt()
+                at = 0
+                fromMemory = true
+                learning = false
+            }
+        }
+    }
+
+    /** A jump while A is set: A stays, but what was recorded from it is no longer one piece. */
+    fun interrupt() {
+        if (state != State.RECORDING) return
+        overflowed = true
+        cacheFrames = 0
+    }
+
+    /** Playback has just gone back to A by seeking: record this pass, to go round from memory after it. */
+    fun learn() {
+        if (state != State.LOOPING || fromMemory) return
+        cacheFrames = 0
+        overflowed = false
+        learning = true
     }
 
     /** A, at the source frame being heard now. */
@@ -103,9 +139,17 @@ internal class AbLoop(private val rate: Int = 44_100) {
      * of it - a double click rather than a loop.
      */
     fun close(frame: Long): Boolean {
-        if (state != State.RECORDING || frame < startFrame + rate / 10) return false
-        endFrame = frame
-        val length = frame - startFrame
+        if (state != State.RECORDING || kotlin.math.abs(frame - startFrame) < rate / 10) return false
+        if (frame < startFrame) {
+            // B before A: the two swap, and what was recorded from A isn't this stretch.
+            endFrame = startFrame
+            startFrame = frame
+            overflowed = true
+        } else {
+            endFrame = frame
+        }
+        val length = endFrame - startFrame
+        learning = false
         fromMemory = !overflowed && length <= cacheFrames
         // Recorded past B by whatever was still queued: that part isn't the loop.
         if (fromMemory) cacheFrames = length.toInt()
@@ -121,6 +165,7 @@ internal class AbLoop(private val rate: Int = 44_100) {
         cacheFrames = 0
         overflowed = false
         fromMemory = false
+        learning = false
         at = 0
     }
 

@@ -64,6 +64,38 @@ class AbLoopTest {
     }
 
     @Test
+    fun aJumpAfterSettingAKeepsAAndTheLoopIsLearntOnTheFirstTurn() {
+        val loop = AbLoop(rate)
+        loop.feed(0, 3_000)
+        loop.open(2_500)
+        loop.feed(3_000, 4_000)
+        loop.interrupt() // the seek bar moved
+        assertEquals(AbLoop.State.RECORDING, loop.state)
+        assertEquals(2_500L, loop.startFrame, "A stays")
+        loop.feed(9_000, 10_000) // playing on from where the bar was moved to
+        assertTrue(loop.close(9_800))
+        assertFalse(loop.fromMemory, "the stretch from A was never played whole")
+        // The engine goes back to A by seeking and learns the stretch on the way round.
+        loop.learn()
+        loop.feed(2_500, 10_000, size = 1_024)
+        assertTrue(loop.fromMemory, "from memory after one turn")
+        val played = frameNumbers(loop.next(7_300))
+        assertEquals((2_500 until 9_800).toList(), played)
+    }
+
+    @Test
+    fun aBBeforeAMakesItTheStart() {
+        val loop = AbLoop(rate)
+        loop.feed(0, 9_000)
+        loop.open(8_500)
+        loop.interrupt() // back to earlier in the song
+        assertTrue(loop.close(4_000))
+        assertEquals(4_000L, loop.startFrame)
+        assertEquals(8_500L, loop.endFrame)
+        assertFalse(loop.fromMemory)
+    }
+
+    @Test
     fun aDoubleClickIsNotALoop() {
         val loop = AbLoop(rate)
         loop.feed(0, 2_000)
