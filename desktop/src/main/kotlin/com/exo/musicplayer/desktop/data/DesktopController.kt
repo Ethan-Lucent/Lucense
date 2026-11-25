@@ -763,18 +763,7 @@ class DesktopController(parent: CoroutineScope) {
         get() = fxState.value
         set(value) {
             fxState.value = value
-            engine.effects.speed = value.speed
-            engine.effects.pitchSemitones = value.pitchSemitones
-            engine.effects.reverb.enabled = value.reverbEnabled
-            engine.effects.reverb.mix = value.reverbMix
-            engine.effects.reverb.decay = value.reverbDecay
-            engine.effects.equalizer.enabled = value.eqEnabled
-            engine.effects.equalizer.setGains(value.eqGains)
-            engine.effects.character.drive = value.drive
-            engine.effects.character.lofi = value.lofi
-            engine.effects.character.tremolo = value.tremolo
-            engine.effects.character.rotate = value.rotate
-            engine.effects.character.echo = value.echo
+            engine.effects.use(value)
         }
 
     private val volumeState = mutableStateOf(settings.volume)
@@ -2422,15 +2411,23 @@ class DesktopController(parent: CoroutineScope) {
     }
 
     /**
-     * Saves [startMs] to [endMs] of [track] as a new song beside it, cut rather
-     * than encoded again, and adds it to the library.
+     * Saves [startMs] to [endMs] of [track] as a new song beside it, and adds it
+     * to the library: cut rather than encoded again - or, [withEffects], played
+     * through the effects on now and encoded again (EffectTrim).
      */
-    suspend fun saveTrim(track: DesktopTrack, startMs: Long, endMs: Long): Result<File> = withContext(Dispatchers.IO) {
+    suspend fun saveTrim(
+        track: DesktopTrack,
+        startMs: Long,
+        endMs: Long,
+        withEffects: Boolean = false
+    ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val ffmpeg = ToolPaths.ffmpeg
             check(ffmpeg.isFile) { "ffmpeg is missing, and it does the cutting. The Download page can fetch it." }
             // Beside the original, unless that folder can't be written to.
             val dir = track.file.parentFile?.takeIf { it.canWrite() } ?: File(settings.downloadDir).apply { mkdirs() }
+            val effects = fx
+            if (withEffects && !effects.isDefault) return@runCatching saveTrimWithEffects(track, startMs, endMs, effects, ffmpeg, dir)
             val out = File(dir, Trim.outputName(track.file.name) { File(dir, it).exists() })
             val process = ProcessBuilder(
                 listOf(ffmpeg.absolutePath) +
@@ -2445,6 +2442,36 @@ class DesktopController(parent: CoroutineScope) {
             addToLibrary(listOf(out))
             out
         }
+    }
+
+    private fun saveTrimWithEffects(
+        track: DesktopTrack,
+        startMs: Long,
+        endMs: Long,
+        effects: DesktopFxState,
+        ffmpeg: File,
+        dir: File
+    ): File {
+        val label = EffectTrim.describe(effects)
+        val ext = EffectTrim.extension(track.file)
+        val stem = track.file.nameWithoutExtension
+        var out = File(dir, "$stem ($label).$ext")
+        var n = 2
+        while (out.exists()) out = File(dir, "$stem ($label ${n++}).$ext")
+        val process = ProcessBuilder(listOf(ffmpeg.absolutePath) + EffectTrim.ffmpegArgs(track.file, out, "${track.title} ($label)"))
+            .redirectErrorStream(true).start()
+        // Read as it comes, so ffmpeg never stalls on a full pipe while being fed.
+        val log = StringBuilder()
+        val reader = kotlin.concurrent.thread(isDaemon = true) { log.append(process.inputStream.bufferedReader().readText()) }
+        val fed = runCatching { process.outputStream.buffered().use { EffectTrim.render(track.file, startMs, endMs, effects, it) } }
+        val code = process.waitFor()
+        reader.join(2_000)
+        if (fed.isFailure || code != 0 || !out.isFile || out.length() == 0L) {
+            out.delete()
+            error(fed.exceptionOrNull()?.message ?: log.lines().lastOrNull { it.isNotBlank() } ?: "ffmpeg stopped with code $code.")
+        }
+        addToLibrary(listOf(out))
+        return out
     }
 
     /** Hands the video to the existing downloader, in the chosen format at the set quality. */
