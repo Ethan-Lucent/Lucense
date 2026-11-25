@@ -79,9 +79,10 @@ fun TrimWindow(controller: DesktopController, track: DesktopTrack, onClose: () -
     DialogWindow(
         onCloseRequest = onClose,
         title = "Trim · ${track.title}",
-        state = rememberDialogState(size = DpSize(780.dp, 500.dp))
+        // Room for the effects row and the buttons under it, labels and all.
+        state = rememberDialogState(size = DpSize(800.dp, 640.dp))
     ) {
-        LaunchedEffect(Unit) { window.minimumSize = Dimension(600, 460) }
+        LaunchedEffect(Unit) { window.minimumSize = Dimension(640, 600) }
         LucenseDesktopTheme {
             if (Glass.on) {
                 // The same glass as the main window: a pane over the colour field.
@@ -249,8 +250,10 @@ internal fun Trimmer(controller: DesktopController, track: DesktopTrack, onClose
             Spacer(Modifier.width(8.dp))
             AccentButton(
                 if (saving) "Saving…" else "Save as a new song",
+                // Something to save: a piece of the song, or the effects on it - the whole
+                // song with them is a new song too.
                 enabled = !saving && lengthMs > 0 && endMs - startMs >= Trim.MIN_LENGTH_MS &&
-                    (startMs > 0 || endMs < lengthMs),
+                    (startMs > 0 || endMs < lengthMs || (effectsOn && withEffects)),
                 icon = Icons.Default.ContentCut
             ) {
                 saving = true
