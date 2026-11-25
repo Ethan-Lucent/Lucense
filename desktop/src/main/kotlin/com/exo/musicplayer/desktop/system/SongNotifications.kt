@@ -78,7 +78,7 @@ class SongNotifications(private val connect: () -> DBusConnection = { Mpris.sess
                     }
                 }
             }
-            file.takeIf { it.isFile }?.toURI()?.toString()
+            file.takeIf { it.isFile }?.toPath()?.toUri()?.toString()
         }.getOrNull()
     }
 

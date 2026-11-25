@@ -1713,7 +1713,9 @@ class DesktopController(parent: CoroutineScope) {
             desktopCovers[key] = ""
             scope.launch {
                 val file = withContext(Dispatchers.IO) { coverForDesktop(track) } ?: return@launch
-                desktopCovers[key] = file.toURI().toString()
+                // file:///..., as GLib wants it: File.toURI's file:/... isn't read as a file by GNOME,
+                // which then showed no cover in the media controls or in notifications.
+                desktopCovers[key] = file.toPath().toUri().toString()
                 if (engine.status.value.track?.file?.absolutePath == key) tellDesktopPlayer()
             }
         }

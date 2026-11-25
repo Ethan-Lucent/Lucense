@@ -87,7 +87,9 @@ class LinuxTest {
             notifications.show("Alone", "Alan Walker", null)
             eventually("the second arrives") { received.size >= 2 }
             // The second replaces the first rather than piling up under it.
-            assertEquals(listOf("Faded|Alan Walker|0|file:///tmp/cover.png", "Alone|Alan Walker|41|null"), received.toList())
+            assertEquals("Faded|Alan Walker|0|file:///tmp/cover.png", received[0])
+            // No cover: Lucense's own icon, as a file:/// address GNOME reads as a file.
+            assertTrue(received[1].startsWith("Alone|Alan Walker|41|file:///") && received[1].endsWith(".png"), received[1])
             notifications.close()
         } finally {
             runCatching { server.releaseBusName(SongNotifications.SERVICE) }
