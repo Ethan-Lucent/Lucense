@@ -304,8 +304,26 @@ file said before anything touched it.
 
 ### Around the app
 
-- **Keyboard shortcuts** (Windows). They work whenever you're not typing in a
-  box, and **/** lists them all:
+- **A-B repeat.** The A-B button beside repeat (or L): A where you are, B a
+  little later, and that stretch plays round and round until you press it
+  again, seamlessly - it's kept in memory rather than re-read from the file -
+  with A and B marked on the seek line.
+- **Settings in tabs**: Library, Playback, Appearance, Downloads, Integrations
+  and About, each keeping its place.
+- **Output sample rate** (Settings, Playback). Automatic plays at the sound
+  system's own rate - 48 kHz on PipeWire - so it converts nothing.
+- **On Linux**: the desktop's media controls get shuffle and repeat as well
+  (MPRIS), and Settings, Integrations can show each song as a desktop
+  notification as it starts.
+- **A log file.** What Lucense notes as it runs is kept in `logs/lucense.log`
+  in its data folder - Settings, About, Logs opens it - for when something
+  goes wrong.
+
+- **Keyboard shortcuts** (Windows and Linux). They work whenever you're not
+  typing in a box, including right after clicking a button: the space bar always
+  plays or pauses, and never presses the button you last clicked. In a box, every
+  key is the box's, so a space or an M is typed rather than pausing or muting.
+  With Ctrl, Alt or Super held, the letters are left alone. **/** lists them all:
 
   | key | does |
   |---|---|
@@ -316,7 +334,9 @@ file said before anything touched it.
   | J | jump the list to the song playing |
   | M | mute, or put the volume back |
   | S · R | shuffle · repeat (all, one, off) |
-  | Ctrl + A · Esc | select everything in view · clear the selection, or back from an album's page |
+  | L | loop: A here, then B here and round, then off |
+  | Ctrl + F | the page's search box, from anywhere |
+  | Ctrl + A · Esc | select everything in view · clear the selection, or back from an album's page; in a text box, Esc leaves it |
 
   Your keyboard's or headset's **media keys** work even while Lucense is in the
   background.
@@ -498,6 +518,17 @@ and writes the same PCM buffer to every open line, so they're sample-identical b
 construction rather than by resynchronisation. Secondary devices get whatever
 they can take and are dropped if they stall, so an unplugged speaker can never
 block the one you're listening to.
+
+**Effects are heard as the slider moves.** Every effect, the equalizer and the
+volume are applied before the audio output, so a change is heard only once the
+audio already queued there has played. Letting the output fill its 186 ms
+buffer, as it once did, meant a quarter of a second's lag on Linux before
+PipeWire and any Bluetooth link added their own. On Linux the playback thread
+now makes 23 ms blocks just in time and keeps about 60 ms queued (measured on
+PipeWire: 167 ms before, 55 ms after). If the output ever nearly runs dry, it
+keeps 20 ms more for the rest of the session and says so on stderr. Windows
+still keeps the buffer full. `-Dlucense.audio.latencyMs=N` sets the amount on
+either, and `=fill` turns pacing off.
 
 **The duck hotkey uses `RegisterHotKey`, not a keyboard hook.** A
 `WH_KEYBOARD_LL` hook would see every keystroke typed anywhere on the machine —

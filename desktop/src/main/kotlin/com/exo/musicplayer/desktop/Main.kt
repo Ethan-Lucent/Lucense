@@ -40,7 +40,6 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
@@ -60,7 +59,8 @@ import com.exo.musicplayer.desktop.ui.MiniPlayer
 import com.exo.musicplayer.desktop.ui.Palette
 import com.exo.musicplayer.desktop.ui.LucenseDesktopTheme
 import com.exo.musicplayer.desktop.ui.ScaledToWindow
-import com.exo.musicplayer.desktop.ui.Typing
+import com.exo.musicplayer.desktop.ui.WindowShortcuts
+import com.exo.musicplayer.desktop.ui.shortcutActions
 import com.exo.musicplayer.desktop.system.SingleInstance
 import androidx.compose.runtime.snapshotFlow
 import java.awt.GraphicsEnvironment
@@ -74,6 +74,11 @@ import java.io.File
 import javax.swing.JFileChooser
 import javax.swing.UIManager
 import javax.swing.filechooser.FileNameExtensionFilter
+import com.exo.musicplayer.desktop.system.LogFile
+import com.exo.musicplayer.desktop.data.AppDirs
+import com.exo.musicplayer.desktop.ui.collectNowPlaying
+import com.exo.musicplayer.desktop.system.Mpris
+import com.exo.musicplayer.desktop.system.Platform
 
 /**
  * Windows entry point.
@@ -86,7 +91,27 @@ fun main(args: Array<String>) {
     // Already running - perhaps out of sight in the tray: that one takes the
     // files and comes to the front, and this one goes.
     if (SingleInstance.handOver(args)) return
+    nameTheWindowClass()
+    // Before anything has anything to say: from here on it is kept in a file too.
+    LogFile.install(File(AppDirs.root, "logs"), AppVersion.name)
     lucense(args)
+}
+
+/**
+ * GNOME, KDE and the rest tie a window to its menu entry - for its icon in the dock
+ * and in Alt+Tab, its name there, and whose notifications are whose - by the
+ * window's X11 class. Java names that after the main class,
+ * "com-exo-musicplayer-desktop-MainKt", which no menu entry is called, so Lucense
+ * showed as that, with a blank icon. The package's entry is lucense-Lucense.desktop,
+ * and a window class of the same name is matched to it. Needs
+ * --add-opens java.desktop/sun.awt.X11 (build.gradle.kts adds it on Linux).
+ */
+private fun nameTheWindowClass() {
+    if (!Platform.isLinux) return
+    runCatching {
+        val toolkit = java.awt.Toolkit.getDefaultToolkit()
+        toolkit.javaClass.getDeclaredField("awtAppClassName").apply { isAccessible = true }.set(toolkit, Mpris.DESKTOP_ENTRY)
+    }.onFailure { System.err.println("Lucense: the window keeps Java's class name (${it.message})") }
 }
 
 private fun lucense(args: Array<String>) = application {
@@ -110,7 +135,7 @@ private fun lucense(args: Array<String>) = application {
     // behind something else - or closed, when Lucense is kept in the tray.
     // Not every desktop has a tray; Windows always does.
     if (controller.trayAvailable) {
-        val playing by controller.engine.status.collectAsState()
+        val playing by controller.engine.collectNowPlaying()
         Tray(
             icon = remember { trayIcon() },
             tooltip = playing.track?.let { "${it.title} — Lucense" } ?: "Lucense",
@@ -129,7 +154,12 @@ private fun lucense(args: Array<String>) = application {
         )
     }
 
-    val mainWindow = rememberWindowState(width = 1280.dp, height = 820.dp)
+    // -Dlucense.window=900x600 starts at another size: for checking how a small window looks.
+    val startSize = System.getProperty("lucense.window")?.split('x')?.mapNotNull { it.trim().toIntOrNull() }?.takeIf { it.size == 2 }
+    val mainWindow = rememberWindowState(width = (startSize?.get(0) ?: 1280).dp, height = (startSize?.get(1) ?: 820).dp)
+    val shortcuts = remember(controller) { WindowShortcuts(controller.shortcutActions()) }
+    // The other windows - the mini player, the lyrics - get the playing keys only.
+    val playbackKeys = remember(controller) { WindowShortcuts(controller.shortcutActions(), playbackOnly = true) }
     Window(
         // Kept in the tray when that is chosen; otherwise closing quits.
         onCloseRequest = { if (!controller.closeToTray()) exitApplication() },
@@ -140,82 +170,11 @@ private fun lucense(args: Array<String>) = application {
         // Lucense draws its own title strip and edges (WindowFrame), and
         // Windows 11 rounds the corners.
         undecorated = true,
-        // Window level, not view level: Ctrl+A has to work whether or not the
-        // track table happens to hold focus, and a text field that owns the
-        // keystroke still gets first refusal because it is a preview handler
-        // only for keys we claim.
-        onPreviewKeyEvent = { event ->
-            when {
-                // Someone is typing, so these keys are the text box's, not the
-                // window's: Ctrl+A is the text in the box rather than every
-                // song on screen, and Escape is its own business.
-                Typing.active -> false
-                event.type == KeyEventType.KeyDown &&
-                    event.isCtrlPressed && event.key == Key.A -> {
-                    controller.selectAll(controller.visibleTracks)
-                    true
-                }
-                event.type == KeyEventType.KeyDown && event.key == Key.Escape &&
-                    controller.hasSelection -> {
-                    controller.clearSelection()
-                    true
-                }
-                else -> false
-            }
-        },
-        // Not a preview handler: a search box that has focus gets the space bar
-        // and the arrow keys first, and these only see what it didn't want.
-        onKeyEvent = { event ->
-            if (event.type != KeyEventType.KeyDown) {
-                false
-            } else {
-                when (event.key) {
-                    Key.Spacebar -> {
-                        controller.togglePlay()
-                        true
-                    }
-                    Key.DirectionRight -> {
-                        if (event.isCtrlPressed) controller.next() else controller.seekBy(5_000)
-                        true
-                    }
-                    Key.DirectionLeft -> {
-                        if (event.isCtrlPressed) controller.previous() else controller.seekBy(-5_000)
-                        true
-                    }
-                    Key.DirectionUp -> {
-                        controller.volume = (controller.volume + 0.05f).coerceAtMost(1f)
-                        true
-                    }
-                    Key.DirectionDown -> {
-                        controller.volume = (controller.volume - 0.05f).coerceAtLeast(0f)
-                        true
-                    }
-                    Key.J -> {
-                        controller.jumpToNowPlaying()
-                        true
-                    }
-                    Key.M -> {
-                        controller.toggleMute()
-                        true
-                    }
-                    Key.S -> {
-                        controller.shuffle = !controller.shuffle
-                        true
-                    }
-                    Key.R -> {
-                        controller.cycleRepeat()
-                        true
-                    }
-                    Key.Slash -> {
-                        controller.showShortcuts = !controller.showShortcuts
-                        true
-                    }
-                    // Back from an album's or an artist's page to the cards.
-                    Key.Escape -> controller.closeGroupPage()
-                    else -> false
-                }
-            }
-        }
+        // Window level, not view level: the keys have to work whether or not
+        // the track table happens to hold focus. Which keys are taken before
+        // the focus sees them, and which only after, is in WindowShortcuts.
+        onPreviewKeyEvent = shortcuts::preview,
+        onKeyEvent = shortcuts::bubble
     ) {
         EveryIconSize()
         // The smallest window the scaled layout still fits in.
@@ -267,7 +226,9 @@ private fun lucense(args: Array<String>) = application {
             undecorated = true,
             transparent = true,
             resizable = false,
-            alwaysOnTop = true
+            alwaysOnTop = true,
+            onPreviewKeyEvent = playbackKeys::preview,
+            onKeyEvent = playbackKeys::bubble
         ) {
             EveryIconSize()
             LaunchedEffect(Unit) {
@@ -303,12 +264,13 @@ private fun lucense(args: Array<String>) = application {
             ),
             undecorated = true,
             alwaysOnTop = true,
+            onPreviewKeyEvent = playbackKeys::preview,
             onKeyEvent = { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
                     controller.lyricsFullscreen = false
                     true
                 } else {
-                    false
+                    playbackKeys.bubble(event)
                 }
             }
         ) {
@@ -322,7 +284,9 @@ private fun lucense(args: Array<String>) = application {
             onCloseRequest = { controller.lyricsDetached = false },
             title = "Lyrics · Lucense",
             icon = painterResource(FALLBACK_ICON),
-            state = rememberWindowState(width = 460.dp, height = 700.dp)
+            state = rememberWindowState(width = 460.dp, height = 700.dp),
+            onPreviewKeyEvent = playbackKeys::preview,
+            onKeyEvent = playbackKeys::bubble
         ) {
             EveryIconSize()
             LaunchedEffect(Unit) { window.minimumSize = Dimension(300, 360) }
@@ -379,7 +343,7 @@ private fun trayIcon(): Painter {
 
 @Composable
 private fun AppHost(controller: DesktopController) {
-    val status by controller.engine.status.collectAsState()
+    val status by controller.engine.collectNowPlaying()
 
     // Shown once per launch, not on every navigation — a splash that reappears
     // when you switch tabs is an interruption, not an introduction.

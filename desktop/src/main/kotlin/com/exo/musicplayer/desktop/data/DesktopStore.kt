@@ -4,7 +4,11 @@ import com.exo.musicplayer.data.model.TrackPlayCount
 import java.io.File
 import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.PreparedStatement
+import org.sqlite.SQLiteConnection
 import java.util.Calendar
+import com.exo.musicplayer.desktop.library.DesktopTrack
+import com.exo.musicplayer.desktop.library.FolderLibrary
 
 data class StoredLyrics(
     val plain: String?,
@@ -45,6 +49,17 @@ class DesktopStore(databaseFile: File) {
         Class.forName("org.sqlite.JDBC")
         connection = DriverManager.getConnection("jdbc:sqlite:${databaseFile.absolutePath}")
         connection.createStatement().use { st ->
+            // Write-ahead logging: a commit appends to a log instead of syncing the
+            // whole database to disk, and reading doesn't wait on writing. Every
+            // write here is its own commit, so a bulk run, an import or a delete of
+            // many songs was one disk sync per row - per table. NORMAL is what WAL
+            // is meant to run with: an app crash loses nothing, a power cut at
+            // worst the last moments' writes, and never the file. Android's Room
+            // keeps its databases this way too, so the file still moves between them.
+            st.execute("PRAGMA journal_mode=WAL")
+            st.execute("PRAGMA synchronous=NORMAL")
+        }
+        connection.createStatement().use { st ->
             st.executeUpdate(
                 """
                 CREATE TABLE IF NOT EXISTS play_events (
@@ -58,6 +73,21 @@ class DesktopStore(databaseFile: File) {
                 """.trimIndent()
             )
             st.executeUpdate("CREATE INDEX IF NOT EXISTS ix_events_path ON play_events(path)")
+            // What the last scan read from each file, so the next one only reads
+            // what changed; see FolderLibrary.scan. isTrack 0 is a file that
+            // turned out not to be a song.
+            st.executeUpdate(
+                """
+                CREATE TABLE IF NOT EXISTS library_cache (
+                    path TEXT PRIMARY KEY,
+                    size INTEGER NOT NULL,
+                    modified INTEGER NOT NULL,
+                    isTrack INTEGER NOT NULL,
+                    title TEXT, artist TEXT, album TEXT, durationMs INTEGER,
+                    trackNumber INTEGER, year INTEGER, albumArtist TEXT, genre TEXT
+                )
+                """.trimIndent()
+            )
             st.executeUpdate(
                 """
                 CREATE TABLE IF NOT EXISTS smart_playlists (
@@ -226,21 +256,16 @@ class DesktopStore(databaseFile: File) {
     /** Opens an event; returns its id so the duration can be filled in later. */
     fun startPlay(path: String, weatherGroup: String?): Long {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        connection.prepareStatement(
+        return insertReturningId(
             "INSERT INTO play_events(path, startedAt, listenedMs, hourOfDay, weatherGroup) " +
-                "VALUES (?,?,?,?,?)"
-        ).use { ps ->
+                "VALUES (?,?,?,?,?)",
+            none = -1L
+        ) { ps ->
             ps.setString(1, path)
             ps.setLong(2, System.currentTimeMillis())
             ps.setLong(3, 0)
             ps.setInt(4, hour)
             ps.setString(5, weatherGroup)
-            ps.executeUpdate()
-        }
-        connection.createStatement().use { st ->
-            st.executeQuery("SELECT last_insert_rowid()").use { rs ->
-                return if (rs.next()) rs.getLong(1) else -1L
-            }
         }
     }
 
@@ -411,12 +436,10 @@ class DesktopStore(databaseFile: File) {
         }
     }
 
-    fun createPlaylist(name: String): Long {
-        connection.prepareStatement("INSERT INTO playlists(name, createdAt) VALUES (?,?)").use {
-            it.setString(1, name); it.setLong(2, System.currentTimeMillis()); it.executeUpdate()
+    fun createPlaylist(name: String): Long =
+        insertReturningId("INSERT INTO playlists(name, createdAt) VALUES (?,?)") {
+            it.setString(1, name); it.setLong(2, System.currentTimeMillis())
         }
-        return queryLong("SELECT last_insert_rowid()")
-    }
 
     fun renamePlaylist(id: Long, name: String) {
         connection.prepareStatement("UPDATE playlists SET name=? WHERE id=?").use {
@@ -598,17 +621,12 @@ class DesktopStore(databaseFile: File) {
         }
     }
 
-    fun createSmart(name: String, rule: String): Long {
-        connection.prepareStatement(
-            "INSERT INTO smart_playlists(name, rule, createdAt) VALUES (?,?,?)"
-        ).use { ps ->
+    fun createSmart(name: String, rule: String): Long =
+        insertReturningId("INSERT INTO smart_playlists(name, rule, createdAt) VALUES (?,?,?)") { ps ->
             ps.setString(1, name)
             ps.setString(2, rule)
             ps.setLong(3, System.currentTimeMillis())
-            ps.executeUpdate()
         }
-        return queryLong("SELECT last_insert_rowid()")
-    }
 
     fun updateSmart(id: Long, name: String, rule: String) {
         connection.prepareStatement("UPDATE smart_playlists SET name = ?, rule = ? WHERE id = ?")
@@ -741,6 +759,110 @@ class DesktopStore(databaseFile: File) {
             }
         }
     }
+
+    /** What the last scan read, by path; see FolderLibrary.scan. */
+    fun libraryCache(): Map<String, FolderLibrary.Cached> = buildMap {
+        connection.createStatement().use { st ->
+            st.executeQuery(
+                "SELECT path, size, modified, isTrack, title, artist, album, durationMs, trackNumber, year, albumArtist, genre " +
+                    "FROM library_cache"
+            ).use { rs ->
+                while (rs.next()) {
+                    val path = rs.getString(1)
+                    val track = if (rs.getInt(4) == 0) null else DesktopTrack(
+                        file = File(path),
+                        title = rs.getString(5) ?: File(path).nameWithoutExtension,
+                        artist = rs.getString(6),
+                        album = rs.getString(7),
+                        durationMs = rs.getLong(8),
+                        trackNumber = rs.getInt(9).takeUnless { rs.wasNull() },
+                        year = rs.getInt(10).takeUnless { rs.wasNull() },
+                        sizeBytes = rs.getLong(2),
+                        albumArtist = rs.getString(11),
+                        genre = rs.getString(12)
+                    )
+                    put(path, FolderLibrary.Cached(rs.getLong(2), rs.getLong(3), track))
+                }
+            }
+        }
+    }
+
+    /**
+     * Makes the cache [entries], all at once: one transaction, under both of
+     * sqlite-jdbc's locks in its own order, so no other thread's statement lands
+     * inside it and a crash halfway leaves the old cache, not half of each.
+     */
+    fun saveLibraryCache(entries: Map<String, FolderLibrary.Cached>) = synchronized(connection) {
+        synchronized(statementLock) {
+            val auto = connection.autoCommit
+            connection.autoCommit = false
+            try {
+                connection.createStatement().use { it.executeUpdate("DELETE FROM library_cache") }
+                connection.prepareStatement(
+                    "INSERT INTO library_cache(path, size, modified, isTrack, title, artist, album, durationMs, " +
+                        "trackNumber, year, albumArtist, genre) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+                ).use { ps ->
+                    for ((path, entry) in entries) {
+                        val track = entry.track
+                        ps.setString(1, path)
+                        ps.setLong(2, entry.size)
+                        ps.setLong(3, entry.modified)
+                        ps.setInt(4, if (track == null) 0 else 1)
+                        ps.setString(5, track?.title)
+                        ps.setString(6, track?.artist)
+                        ps.setString(7, track?.album)
+                        ps.setLong(8, track?.durationMs ?: 0L)
+                        if (track?.trackNumber != null) ps.setInt(9, track.trackNumber) else ps.setNull(9, java.sql.Types.INTEGER)
+                        if (track?.year != null) ps.setInt(10, track.year) else ps.setNull(10, java.sql.Types.INTEGER)
+                        ps.setString(11, track?.albumArtist)
+                        ps.setString(12, track?.genre)
+                        ps.addBatch()
+                    }
+                    ps.executeBatch()
+                }
+                connection.commit()
+            } catch (t: Throwable) {
+                runCatching { connection.rollback() }
+                throw t
+            } finally {
+                connection.autoCommit = auto
+            }
+        }
+    }
+
+    /**
+     * sqlite-jdbc's two locks. Every statement on this connection runs under the
+     * second (its DB's execute, executeUpdate, executeBatch and prepare are all
+     * synchronized on it); updates also take the first, the connection, before
+     * it. They are only ever taken in that order - taking them the other way
+     * round deadlocked against sqlite-jdbc's own updates.
+     */
+    private val statementLock: Any = (connection as? SQLiteConnection)?.database ?: connection
+
+    /**
+     * Runs the INSERT [sql] and returns the new row's id, or [none].
+     *
+     * Every thread shares this one connection, and the id is read back with a
+     * second statement, SELECT last_insert_rowid(), which says whichever row any
+     * thread inserted last: a song's play took a playlist's or a mark's id, and
+     * its listening time was then written into that row (DesktopStoreTest: 280
+     * of 450 plays, writing alongside playlists). Holding sqlite-jdbc's own lock
+     * across the pair - both of them, in its own order - keeps any other
+     * statement out from between them.
+     * INSERT ... RETURNING would be one statement, but on a shared connection it
+     * stays in progress while its row is read and trips other threads' commits
+     * (SQLITE_BUSY).
+     */
+    private fun insertReturningId(sql: String, none: Long = 0L, bind: (PreparedStatement) -> Unit): Long =
+        synchronized(connection) {
+            synchronized(statementLock) {
+                connection.prepareStatement(sql).use { ps ->
+                    bind(ps)
+                    ps.executeUpdate()
+                }
+                queryLong("SELECT last_insert_rowid()").takeIf { it > 0L } ?: none
+            }
+        }
 
     private fun queryLong(sql: String): Long {
         connection.createStatement().use { st ->

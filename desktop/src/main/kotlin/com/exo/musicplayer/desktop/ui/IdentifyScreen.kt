@@ -116,6 +116,7 @@ fun IdentifyScreen(controller: DesktopController, onChooseMedia: () -> File?) {
                         value = controller.youtubeQuery,
                         onValueChange = { controller.youtubeQuery = it },
                         placeholder = mode.placeholder,
+                        search = true,
                         leading = Icons.Default.Search,
                         modifier = Modifier.weight(1f),
                         onSubmit = { run() }
@@ -128,6 +129,7 @@ fun IdentifyScreen(controller: DesktopController, onChooseMedia: () -> File?) {
                         value = controller.identifyArtist,
                         onValueChange = { controller.identifyArtist = it },
                         placeholder = "Artist name",
+                        search = true,
                         leading = Icons.Default.Person,
                         modifier = Modifier.weight(1f),
                         onSubmit = { run() }
@@ -146,6 +148,7 @@ fun IdentifyScreen(controller: DesktopController, onChooseMedia: () -> File?) {
                         value = controller.identifyQuery,
                         onValueChange = { controller.identifyQuery = it },
                         placeholder = mode.placeholder,
+                        search = true,
                         leading = if (mode == IdentifyMode.LINK) {
                             Icons.Default.Link
                         } else {

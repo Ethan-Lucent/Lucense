@@ -33,6 +33,12 @@ class Mpris(private val actions: Actions) {
         fun stop()
         fun seekTo(ms: Long)
         fun positionMs(): Long
+
+        /** The desktop's shuffle switch. */
+        fun setShuffle(on: Boolean) = Unit
+
+        /** The desktop's repeat switch: "None", "Track" or "Playlist", as MPRIS names them. */
+        fun setLoop(status: String) = Unit
     }
 
     /** The song as the desktop shows it. */
@@ -47,7 +53,10 @@ class Mpris(private val actions: Actions) {
         /** A `file://` address of the cover. */
         val artUrl: String? = null,
         val canGoNext: Boolean = true,
-        val canGoPrevious: Boolean = true
+        val canGoPrevious: Boolean = true,
+        val shuffle: Boolean = false,
+        /** "None", "Track" or "Playlist". */
+        val loop: String = LOOP_NONE
     )
 
     @Volatile private var connection: DBusConnection? = null
@@ -80,24 +89,6 @@ class Mpris(private val actions: Actions) {
         }.onFailure { problem = it }.onSuccess { problem = null }.isSuccess
     }
 
-    /**
-     * The session bus. Its address may name an abstract socket (dbus-launch
-     * and dbus-run-session give one), which Java's own Unix sockets can't
-     * open; a systemd desktop's bus is also at /run/user/<uid>/bus, which they can.
-     */
-    private fun sessionBus(): DBusConnection {
-        val address = System.getenv("DBUS_SESSION_BUS_ADDRESS").orEmpty()
-        if ("abstract=" in address || address.isBlank()) {
-            val uid = runCatching {
-                java.io.File("/proc/self/status").readLines().first { it.startsWith("Uid:") }.split('\t', ' ').filter { it.isNotEmpty() }[1]
-            }.getOrNull()
-            val socket = uid?.let { java.io.File("/run/user/$it/bus") }
-            if (socket != null && socket.exists()) {
-                return DBusConnectionBuilder.forAddress("unix:path=" + socket.path).build()
-            }
-        }
-        return DBusConnectionBuilder.forSessionBus().build()
-    }
 
     @Synchronized
     fun stop() {
@@ -123,6 +114,8 @@ class Mpris(private val actions: Actions) {
         }
         if (before.canGoNext != next.canGoNext) changed["CanGoNext"] = Variant(next.canGoNext)
         if (before.canGoPrevious != next.canGoPrevious) changed["CanGoPrevious"] = Variant(next.canGoPrevious)
+        if (before.shuffle != next.shuffle) changed["Shuffle"] = Variant(next.shuffle)
+        if (before.loop != next.loop) changed["LoopStatus"] = Variant(next.loop)
         if (changed.isNotEmpty()) {
             runCatching { bus.sendMessage(Properties.PropertiesChanged(PATH, PLAYER, changed, emptyList())) }
         }
@@ -185,7 +178,9 @@ class Mpris(private val actions: Actions) {
                 "CanPlay" to Variant(playable),
                 "CanPause" to Variant(playable),
                 "CanSeek" to Variant(playable),
-                "CanControl" to Variant(true)
+                "CanControl" to Variant(true),
+                "Shuffle" to Variant(current.shuffle),
+                "LoopStatus" to Variant(current.loop)
             )
         }
         else -> throw DBusExecutionException("No such interface: $face")
@@ -246,17 +241,52 @@ class Mpris(private val actions: Actions) {
         override fun <A : Any?> Get(interfaceName: String, propertyName: String): A =
             (properties(interfaceName)[propertyName] ?: throw DBusExecutionException("No such property: $propertyName")) as A
 
-        override fun <A : Any?> Set(interfaceName: String, propertyName: String, value: A) = Unit
+        /**
+         * The desktop flipping shuffle or repeat. The only writable properties
+         * Lucense has; anything else is quietly refused, as MPRIS allows.
+         */
+        override fun <A : Any?> Set(interfaceName: String, propertyName: String, value: A) {
+            if (interfaceName != PLAYER) return
+            val raw = (value as? Variant<*>)?.value ?: value
+            when (propertyName) {
+                "Shuffle" -> (raw as? Boolean)?.let { actions.setShuffle(it) }
+                "LoopStatus" -> (raw as? String)?.takeIf { it in LOOPS }?.let { actions.setLoop(it) }
+            }
+        }
 
         override fun GetAll(interfaceName: String): Map<String, Variant<*>> = properties(interfaceName)
     }
 
     companion object {
+        /**
+         * The session bus. Its address may name an abstract socket (dbus-launch
+         * and dbus-run-session give one), which Java's own Unix sockets can't
+         * open; a systemd desktop's bus is also at /run/user/<uid>/bus, which they can.
+         */
+        fun sessionBus(): DBusConnection {
+            val address = System.getenv("DBUS_SESSION_BUS_ADDRESS").orEmpty()
+            if ("abstract=" in address || address.isBlank()) {
+                val uid = runCatching {
+                    java.io.File("/proc/self/status").readLines().first { it.startsWith("Uid:") }.split('\t', ' ').filter { it.isNotEmpty() }[1]
+                }.getOrNull()
+                val socket = uid?.let { java.io.File("/run/user/$it/bus") }
+                if (socket != null && socket.exists()) {
+                    return DBusConnectionBuilder.forAddress("unix:path=" + socket.path).build()
+                }
+            }
+            return DBusConnectionBuilder.forSessionBus().build()
+        }
+
         const val BUS_NAME = "org.mpris.MediaPlayer2.lucense"
         const val PATH = "/org/mpris/MediaPlayer2"
         const val ROOT = "org.mpris.MediaPlayer2"
         const val PLAYER = "org.mpris.MediaPlayer2.Player"
         private const val NO_TRACK = "/org/mpris/MediaPlayer2/TrackList/NoTrack"
+
+        const val LOOP_NONE = "None"
+        const val LOOP_TRACK = "Track"
+        const val LOOP_PLAYLIST = "Playlist"
+        private val LOOPS = setOf(LOOP_NONE, LOOP_TRACK, LOOP_PLAYLIST)
 
         /** The installed menu entry's name, without .desktop: jpackage's package-name, a dash, the app's name. */
         const val DESKTOP_ENTRY = "lucense-Lucense"

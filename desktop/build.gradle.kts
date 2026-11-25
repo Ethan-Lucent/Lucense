@@ -67,6 +67,8 @@ tasks.test {
     useJUnitPlatform()
     // Linux's data folder, kept inside the build, so tests never touch anyone's own Lucense.
     environment("XDG_DATA_HOME", layout.buildDirectory.dir("test-data").get().asFile.absolutePath)
+    // Dragged songs are linked into ~/Downloads/.lucense-share on Linux; never from a test.
+    systemProperty("lucense.share.dir", "off")
     testLogging {
         events("passed", "skipped", "failed")
         showStandardStreams = true
@@ -92,6 +94,10 @@ compose.desktop {
         // the number on screen is the number the installer registered with
         // Windows, rather than a second copy that can drift.
         jvmArgs("-Dlucense.version=$lucenseVersion")
+
+        // The window's X11 class is named after the menu entry (see Main.kt), which
+        // means reaching into AWT's X11 toolkit.
+        if (buildingOnLinux) jvmArgs("--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED")
 
         // Memory behaviour, deliberately without -Xmx.
         //
@@ -268,6 +274,10 @@ listOf("", "Release").forEach { variant ->
         (this as org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask).apply {
             dependsOn(image)
             appImage.set(image.flatMap { it.destinationDir.dir("Lucense") })
+            // Compose leaves --icon out when packaging an existing app image, and jpackage
+            // then gives the menu entry - and so the dock and Alt+Tab - Java's own Duke
+            // icon. jpackage takes --icon fine alongside --app-image.
+            freeArgs.addAll("--icon", project.layout.projectDirectory.file("icons/lucense.png").asFile.absolutePath)
         }
     }
 }

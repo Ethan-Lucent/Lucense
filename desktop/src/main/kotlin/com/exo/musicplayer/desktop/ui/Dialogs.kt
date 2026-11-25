@@ -57,6 +57,7 @@ import com.exo.musicplayer.desktop.data.FIX_LABEL
 import com.exo.musicplayer.desktop.library.DesktopTrack
 import com.exo.musicplayer.util.asDuration
 import java.util.Locale
+import com.exo.musicplayer.desktop.system.Platform
 
 /** Which modal is open, if any. */
 enum class DialogKind { BULK, DUPLICATES, ADD_TO_PLAYLIST, MERGE }
@@ -561,7 +562,7 @@ fun DuplicatesDialog(controller: DesktopController, onDismiss: () -> Unit) {
                 Spacer(Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "${selected.sumOf { it.remove.size }} files will go to the Recycle Bin",
+                        "${selected.sumOf { it.remove.size }} files will go to the ${Platform.trashName}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Palette.TextDim,
                         modifier = Modifier.weight(1f)
@@ -858,37 +859,12 @@ fun EditTracksDialog(controller: DesktopController, tracks: List<DesktopTrack>, 
 fun ShortcutsDialog(onDismiss: () -> Unit) {
     ScrimDialog(
         title = "Keyboard shortcuts",
-        subtitle = "Live whenever the window has focus and you are not typing in a box",
+        subtitle = "Live whenever the window has focus and you are not typing in a box (Esc leaves one)",
         onDismiss = onDismiss
     ) {
-        listOf(
-            "Space" to "Play or pause",
-            "\u2190  \u2192" to "Back or forward five seconds",
-            "Ctrl + \u2190  \u2192" to "Previous or next song",
-            "\u2191  \u2193" to "Volume up or down",
-            "J" to "Jump the list to the song playing",
-            "S" to "Shuffle on or off",
-            "M" to "Mute, or put the volume back",
-            "R" to "Repeat: all, then one, then off",
-            "Ctrl + A" to "Select every song in view",
-            "Esc" to "Clear the selection, or back from an album or artist",
-            "Ctrl + click" to "Add one song to the selection",
-            "Shift + click" to "Select everything between",
-            "/" to "This list"
-        ).forEach { (keys, what) ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    keys,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.Accent,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.width(132.dp)
-                )
-                Text(what, style = MaterialTheme.typography.bodySmall, color = Palette.Text)
-            }
+        // Scrolls rather than running off a small window: the guide is long.
+        Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+            KeyGuide()
         }
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth()) {

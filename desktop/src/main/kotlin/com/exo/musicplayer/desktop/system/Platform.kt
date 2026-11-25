@@ -9,6 +9,19 @@ object Platform {
     val isWindows: Boolean = name.startsWith("Windows")
     val isLinux: Boolean = name.startsWith("Linux")
 
+    /** Where deleted files go, by this desktop's own name for it. */
+    val trashName: String = if (isWindows) "Recycle Bin" else "Trash"
+
+    /** The menu item that opens a song's folder with the song picked out. */
+    val showInFolder: String = if (isWindows) "Show in Explorer" else "Show in folder"
+
+    /** The system, for "Lucense for …". */
+    val systemName: String = when {
+        isWindows -> "Windows"
+        isLinux -> "Linux"
+        else -> name
+    }
+
     /** A program's file name here: `yt-dlp.exe` on Windows, `yt-dlp` elsewhere. */
     fun program(name: String): String = if (isWindows) "$name.exe" else name
 

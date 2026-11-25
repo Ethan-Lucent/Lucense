@@ -8,6 +8,8 @@ import kotlin.math.sin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import java.util.concurrent.locks.LockSupport
 import javax.sound.sampled.SourceDataLine
 import kotlin.concurrent.thread
 
@@ -18,14 +20,18 @@ data class PlaybackStatus(
     val durationMs: Long = 0L,
     val error: String? = null,
     /** Set once the file has been played to its end, and only then. */
-    val ended: Boolean = false
+    val ended: Boolean = false,
+    /** An A-B loop's A, once set; see [PlaybackEngine.openLoop]. */
+    val loopStartMs: Long? = null,
+    /** Its B, once set: from then on playback goes round from B to A. */
+    val loopEndMs: Long? = null
 ) {
     val progress: Float
         get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 }
 
 /**
- * The Windows playback engine.
+ * The desktop playback engine, on Windows and Linux.
  *
  * One decode feeds every output. A dedicated thread pulls PCM from [Decoder],
  * runs it through [EffectChain], and writes the *same* buffer to each open
@@ -35,8 +41,18 @@ data class PlaybackStatus(
  *
  * Writes to secondary devices are best-effort: a stalled or unplugged endpoint
  * is dropped rather than allowed to block the device actually being listened to.
+ *
+ * Blocks are small and made just in time - see [OutputPacing] - so a moved
+ * effect slider is heard within tens of milliseconds, rather than after a whole
+ * line of audio already made with the old setting.
  */
-class PlaybackEngine {
+class PlaybackEngine(
+    /** Frames a second for everything this plays; see [AudioDevices.playbackRate]. */
+    val rate: Int = AudioDevices.playbackRate()
+) {
+
+    /** What is written to the devices. */
+    private val format = AudioDevices.format(rate)
 
     /** Position updates coarser than this are invisible on screen. */
     private val PUBLISH_INTERVAL_MS = 250L
@@ -44,13 +60,21 @@ class PlaybackEngine {
     private val _status = MutableStateFlow(PlaybackStatus())
     val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
 
-    val effects = EffectChain()
+    val effects = EffectChain(rate)
 
     /** Band levels for the mixer display; idle unless something is showing it. */
     val spectrum = SpectrumAnalyser()
 
     /** The bass as it reaches the speakers, for the reactive backgrounds. */
     val beat = BeatTap()
+
+    init {
+        // The resampler's shared window, ready before the first 48 kHz song or
+        // pitch change needs it, so the playback thread never works it out.
+        thread(name = "lucense-resampler-warm-up", isDaemon = true, priority = Thread.MIN_PRIORITY) {
+            StreamingResampler.warmUp()
+        }
+    }
 
     /**
      * What this track is multiplied by so it sits at the same loudness as the
@@ -62,9 +86,32 @@ class PlaybackEngine {
     private var lines = listOf<SourceDataLine>()
     private var outputs = listOf<DesktopAudioOutput>()
 
+    /**
+     * One per playback thread, so stopping one can never be undone by the next.
+     *
+     * A shared flag could be: [stop] waits only so long for the old thread, and
+     * [play] then cleared the flag for the new one - so an old thread slow to
+     * notice carried on as well, decoding the old song into the new one's lines.
+     */
+    private class Session {
+        @Volatile var stopped = false
+    }
+
+    @Volatile private var session: Session? = null
+
+    /** How full the line is kept; on Linux, short, so effects are heard at once. */
+    private val pacing = OutputPacing.forThisSystem(rate)
+
     @Volatile private var playing = false
-    @Volatile private var stopRequested = false
     @Volatile private var seekToMs: Long? = null
+
+    /** The A-B loop; the playback thread's alone, asked through [loopRequest]. */
+    private val loop = AbLoop(rate)
+
+    private enum class LoopRequest { OPEN, CLOSE, CLEAR }
+
+    /** What the A-B button asked for, picked up by the playback thread on its next pass. */
+    @Volatile private var loopRequest: LoopRequest? = null
     @Volatile private var outputsDirty = false
     @Volatile private var framesPlayed = 0L
 
@@ -108,14 +155,16 @@ class PlaybackEngine {
         // UI thread while the playback thread is writing to them is a race.
         // The worker picks this up on its next pass.
         outputsDirty = true
+        wake()
     }
 
     fun play(track: DesktopTrack, startMs: Long = 0L) {
         stop()
-        stopRequested = false
+        val current = Session()
+        session = current
         playing = true
         val from = startMs.coerceAtLeast(0L)
-        framesPlayed = from * AudioDevices.FORMAT.sampleRate.toInt() / 1000
+        framesPlayed = from * rate / 1000
         pendingStartMs = 0L
         lastPublished = -1
         effects.reset()
@@ -131,7 +180,7 @@ class PlaybackEngine {
         // Above normal priority: a playback thread that loses its time slice to
         // the UI thread is an audible gap, and it does very little per wake-up.
         worker = thread(name = "lucense-playback", isDaemon = true, priority = Thread.MAX_PRIORITY) {
-            run(track, framesPlayed)
+            run(track, framesPlayed, current)
         }
     }
 
@@ -160,7 +209,8 @@ class PlaybackEngine {
             return
         }
         playing = !playing
-        _status.value = _status.value.copy(playing = playing)
+        _status.update { it.copy(playing = playing) }
+        wake()
     }
 
     fun seekTo(ms: Long) {
@@ -173,22 +223,53 @@ class PlaybackEngine {
         // it. Until then everything watching the position would show the old
         // spot and then jump forward, which on the seek bar read as it bugging
         // in and out.
-        _status.value = _status.value.copy(positionMs = target)
+        _status.update { it.copy(positionMs = target) }
+        wake()
     }
 
     fun stop() {
-        stopRequested = true
+        session?.stopped = true
         playing = false
         spectrum.reset()
-        worker?.join(600)
+        val old = worker
+        wake()
+        if (old != null && old !== Thread.currentThread()) {
+            old.join(STOP_WAIT_MS)
+            // Its session is over either way - it ends at its next step and
+            // nothing can bring it back - but a thread this slow is worth knowing about.
+            if (old.isAlive) System.err.println("Lucense: the playback thread took over $STOP_WAIT_MS ms to stop")
+        }
         worker = null
         closeLines()
-        _status.value = _status.value.copy(playing = false)
+        _status.update { it.copy(playing = false) }
+    }
+
+    /** A, at what is being heard now: from here on it is recorded, ready to go round. */
+    fun openLoop() {
+        loopRequest = LoopRequest.OPEN
+        wake()
+    }
+
+    /** B, at what is being heard now, and straight back to A, round and round. */
+    fun closeLoop() {
+        loopRequest = LoopRequest.CLOSE
+        wake()
+    }
+
+    /** No more loop; playback carries on from wherever in it it had got to. */
+    fun clearLoop() {
+        loopRequest = LoopRequest.CLEAR
+        wake()
+    }
+
+    /** Gets the playback thread out of a wait, so it sees a pause, a seek or a stop at once. */
+    private fun wake() {
+        worker?.let { LockSupport.unpark(it) }
     }
 
     fun setVolume(value: Float) { effects.volume = value.coerceIn(0f, 1f) }
 
-    private fun run(track: DesktopTrack, startFrame: Long) {
+    private fun run(track: DesktopTrack, startFrame: Long, session: Session) {
         var current = track
         var decoder: Decoder? = null
         // The song being faded in, while the one above is still going.
@@ -201,20 +282,21 @@ class PlaybackEngine {
         // finished and playback merely ending here.
         var reachedEnd = false
         try {
-            decoder = Decoder.open(current.file, startFrame)
+            decoder = Decoder.open(current.file, startFrame, rate)
             reopenLines()
             if (lines.isEmpty()) {
-                _status.value = _status.value.copy(
+                _status.update { it.copy(
                     playing = false,
                     error = "No audio output could be opened."
-                )
+                ) }
                 return
             }
 
-            val rate = AudioDevices.FORMAT.sampleRate.toInt()
             var duration = if (current.durationMs > 0) current.durationMs else -1L
 
-            while (!stopRequested) {
+            resetMeter()
+            loop.clear()
+            while (!session.stopped) {
                 if (outputsDirty) {
                     outputsDirty = false
                     reopenLines()
@@ -224,24 +306,91 @@ class PlaybackEngine {
                 // moves the position straight away rather than on resume.
                 seekToMs?.let { target ->
                     seekToMs = null
+                    // Inside a loop playing from memory, a jump stays there: the
+                    // file isn't touched. Anywhere else ends the loop.
+                    if (loop.seek(target * rate / 1000)) {
+                        lines.forEach { runCatching { it.flush() } }
+                        pacing.restart()
+                        framesPlayed = loop.positionFrame
+                        publishPosition(duration, rate, force = true)
+                        return@let
+                    }
+                    val targetFrame = target * rate / 1000
+                    when {
+                        // A stays where it was set; only its recording is broken.
+                        loop.state == AbLoop.State.RECORDING -> loop.interrupt()
+                        // Outside the loop ends it. With a twentieth of a second to spare at
+                        // each end: going back to A by seeking rounds A to a millisecond, which
+                        // can land a few frames before it.
+                        loop.state == AbLoop.State.LOOPING &&
+                            (targetFrame < loop.startFrame - rate / 20 || targetFrame >= loop.endFrame + rate / 20) -> {
+                            loop.clear()
+                            publishLoop(rate)
+                        }
+                        else -> Unit
+                    }
                     // A jump abandons any overlap in progress: the song that was
                     // being faded in is no longer the one about to arrive.
                     runCatching { incoming?.close() }
                     incoming = null
                     incomingTrack = null
                     decoder = seek(decoder, current, target * rate / 1000)
+                    // A long skip forward can outlast stop()'s wait. If this session
+                    // ended meanwhile, the position and the lines are no longer its own.
+                    if (session.stopped) return@let
                     framesPlayed = decoder?.positionFrames ?: 0L
+                    // Back at A, for a loop not yet in memory: record this pass round.
+                    if (loop.state == AbLoop.State.LOOPING && !loop.fromMemory && framesPlayed <= loop.startFrame + rate / 20) loop.learn()
                     effects.reset()
                     spectrum.reset()
+                    resetMeter()
                     beat.reset()
                     // Drops what is already queued at the old position. Without
                     // it, up to a fifth of a second of the old spot still plays
                     // after the jump, which is what makes a seek feel sluggish.
                     lines.forEach { runCatching { it.flush() } }
+                    pacing.restart()
                     publishPosition(duration, rate, force = true)
                 }
 
-                if (!playing) { Thread.sleep(40); continue }
+                loopRequest?.let { request ->
+                    loopRequest = null
+                    // What is being heard, which trails what was decoded by what is
+                    // still queued - in source frames, so at the song's own speed.
+                    val heard = (framesPlayed - queuedFrames() * effects.speed).toLong().coerceAtLeast(0L)
+                    when (request) {
+                        LoopRequest.OPEN -> loop.open(heard)
+                        LoopRequest.CLOSE -> if (loop.close(heard)) {
+                            if (loop.fromMemory) {
+                                // B is now: what was queued after it isn't heard; A is next.
+                                lines.forEach { runCatching { it.flush() } }
+                                pacing.restart()
+                            } else {
+                                seekToMs = loop.startFrame * 1000 / rate
+                            }
+                        }
+                        LoopRequest.CLEAR -> {
+                            val wasRound = loop.state == AbLoop.State.LOOPING && loop.fromMemory
+                            val at = framesPlayed
+                            loop.clear()
+                            // The file is still at B: it carries on from where the loop had got to.
+                            if (wasRound) seekToMs = at * 1000 / rate
+                        }
+                    }
+                    publishLoop(rate)
+                }
+
+                if (!playing) {
+                    // The line runs dry while paused, which is no underrun.
+                    pacing.restart()
+                    // Woken by play, a seek or a stop; the timeout is only a backstop.
+                    LockSupport.parkNanos(this, PAUSED_PARK_NANOS)
+                    continue
+                }
+
+                // Waited for before the block is made rather than after: the
+                // block then carries whatever the sliders say right now.
+                if (!awaitRoom(session)) continue
 
                 // Open the next song early enough to overlap by the chosen
                 // amount. Only possible where this one's length is known -
@@ -251,7 +400,7 @@ class PlaybackEngine {
                     val leftMs = duration - framesPlayed * 1000 / rate
                     val follow = upNext
                     if (follow != null && leftMs in 1..overlap) {
-                        val opened = runCatching { Decoder.open(follow.file, 0L) }.getOrNull()
+                        val opened = runCatching { Decoder.open(follow.file, 0L, rate) }.getOrNull()
                         if (opened != null) {
                             incoming = opened
                             incomingTrack = follow
@@ -261,7 +410,16 @@ class PlaybackEngine {
                     }
                 }
 
-                val raw = decoder?.read(4096)
+                val roundTheLoop = loop.state == AbLoop.State.LOOPING && loop.fromMemory
+                if (roundTheLoop) framesPlayed = loop.positionFrame
+                val raw = if (roundTheLoop) loop.next(BLOCK_FRAMES) else decoder?.read(BLOCK_FRAMES)
+                // Kept as read, before any gain or effect touches it, for A to start from.
+                if (raw != null && !roundTheLoop) loop.heard(raw, framesPlayed + raw.size / 2)
+                if (raw == null && loop.state != AbLoop.State.OFF) {
+                    // The song ended with only A set: there is nothing to go round.
+                    loop.clear()
+                    publishLoop(rate)
+                }
                 if (raw == null) {
                     // This song is done. Carry on into the next one on this
                     // same thread, through these same open lines: closing them
@@ -271,7 +429,7 @@ class PlaybackEngine {
                     if (handover == null) {
                         val follow = upNext
                         if (follow != null) {
-                            handover = runCatching { Decoder.open(follow.file, 0L) }.getOrNull()
+                            handover = runCatching { Decoder.open(follow.file, 0L, rate) }.getOrNull()
                             started = follow
                         }
                     }
@@ -327,22 +485,32 @@ class PlaybackEngine {
                 if (processed.isEmpty()) continue
                 // After the chain, so speed, pitch and reverb are all visible
                 // in the meter rather than it showing the untouched source.
-                spectrum.feed(processed)
-                beat.feed(processed, queuedFrames(), rate)
+                feedMeter(processed)
+                val queued = queuedFrames()
+                beat.feed(processed, queued, rate)
+                pacing.beforeWrite(queued)
 
-                writeToAll(toBytes(processed))
+                val length = toBytes(processed)
+                writeToAll(pcmScratch, length)
                 publishPosition(duration, rate)
+                // A loop too long to keep in memory goes back to A the slow way.
+                if (loop.state == AbLoop.State.LOOPING && !loop.fromMemory && framesPlayed >= loop.endFrame && seekToMs == null) {
+                    seekToMs = loop.startFrame * 1000 / rate
+                }
             }
+            // The last song's last moments are still in the lines: they play out
+            // here, on this thread, rather than being cut by whatever stops it next.
+            if (reachedEnd && !session.stopped) lines.forEach { runCatching { it.drain() } }
         } catch (t: Throwable) {
-            _status.value = _status.value.copy(
+            _status.update { it.copy(
                 playing = false,
                 error = t.message ?: "Playback failed."
-            )
+            ) }
         } finally {
             runCatching { decoder?.close() }
             runCatching { incoming?.close() }
-            if (!stopRequested) {
-                _status.value = _status.value.copy(playing = false, ended = reachedEnd)
+            if (!session.stopped) {
+                _status.update { it.copy(playing = false, ended = reachedEnd) }
             }
         }
     }
@@ -361,7 +529,7 @@ class PlaybackEngine {
             return current
         }
         runCatching { current?.close() }
-        return Decoder.open(track.file, frame)
+        return Decoder.open(track.file, frame, rate)
     }
 
     /**
@@ -378,33 +546,106 @@ class PlaybackEngine {
         val slot = positionMs / PUBLISH_INTERVAL_MS
         if (!force && slot == lastPublished) return
         lastPublished = slot
-        _status.value = _status.value.copy(
+        _status.update { it.copy(
             positionMs = positionMs,
             // Unknown stays unknown. Reporting the position as the length made
             // the seek bar scale against a moving target, so its middle landed
             // near the start, and made every pause look like the end of a track.
             durationMs = if (duration > 0) duration else 0L
-        )
+        ) }
+    }
+
+    private fun publishLoop(rate: Int) {
+        val start = loop.startFrame.takeIf { loop.state != AbLoop.State.OFF }?.let { it * 1000 / rate }
+        val end = loop.endFrame.takeIf { loop.state == AbLoop.State.LOOPING }?.let { it * 1000 / rate }
+        _status.update { it.copy(loopStartMs = start, loopEndMs = end) }
     }
 
     /** Frames handed to the primary line that it has not played yet. */
-    private fun queuedFrames(): Int = runCatching {
-        val line = lines.firstOrNull() ?: return 0
-        (line.bufferSize - line.available()) / line.format.frameSize
-    }.getOrDefault(0)
+    private fun queuedFrames(): Int = lines.firstOrNull()?.let(::queuedFrames) ?: 0
 
-    private fun writeToAll(bytes: ByteArray) {
+    private fun queuedFrames(line: SourceDataLine): Int =
+        try {
+            (line.bufferSize - line.available()) / line.format.frameSize
+        } catch (_: Exception) {
+            0
+        }
+
+    /**
+     * Sleeps until the primary line has room by [pacing]'s measure. False when
+     * something needs the loop first: a stop, a seek, a pause or new outputs.
+     */
+    private fun awaitRoom(session: Session): Boolean {
+        while (true) {
+            if (session.stopped || seekToMs != null || !playing || outputsDirty) return false
+            val wait = pacing.waitNanos(queuedFrames())
+            if (wait <= 0L) return true
+            LockSupport.parkNanos(this, minOf(wait, MAX_WAIT_SLICE_NANOS))
+        }
+    }
+
+    private fun writeToAll(bytes: ByteArray, length: Int) {
         val current = lines
         if (current.isEmpty()) return
-        // The primary write blocks, which is what paces playback.
-        runCatching { current[0].write(bytes, 0, bytes.size) }
+        // The primary write blocks, which is what paces playback when the line is kept full.
+        runCatching { current[0].write(bytes, 0, length) }
+        if (current.size == 1) return
+        val frameSize = format.frameSize
+        // Paced, a mirror is held to what the primary has queued: left to fill
+        // its whole buffer it would play that much later than the primary, an
+        // echo between the two devices. Kept full, both are full, as before.
+        val level = if (pacing.filling) Int.MAX_VALUE else queuedFrames(current[0]) * frameSize
         for (i in 1 until current.size) {
             // Mirrors must never stall the primary, so they get whatever the
             // line can take right now and drop the rest.
             runCatching {
-                val room = current[i].available()
-                if (room > 0) current[i].write(bytes, 0, minOf(room, bytes.size))
+                val line = current[i]
+                val room = line.available()
+                val allowed = minOf(room, length, level - (line.bufferSize - room))
+                val aligned = allowed - allowed % frameSize
+                if (aligned > 0) line.write(bytes, 0, aligned)
             }
+        }
+    }
+
+    /** The newest frames played, for the meter's next reading. Playback thread only. */
+    private var meterWindow = FloatArray(0)
+    private var meterFrames = 0
+    private var framesSinceMeter = 0
+
+    private fun resetMeter() {
+        meterFrames = 0
+        // So the first full window is read at once rather than a reading later.
+        framesSinceMeter = METER_EVERY_FRAMES
+    }
+
+    /**
+     * Gives the mixer's meter a reading about every 93 ms, as it had when blocks
+     * were 4096 frames. Its bars fall by a fixed share per reading, so feeding
+     * it every 23 ms block would make them drop four times as fast; and a block
+     * can now be shorter than the window it reads, so the window is gathered here.
+     */
+    private fun feedMeter(block: FloatArray) {
+        if (!spectrum.enabled) return
+        val needed = spectrum.framesNeeded
+        if (meterWindow.size != needed * 2) {
+            meterWindow = FloatArray(needed * 2)
+            meterFrames = 0
+        }
+        val frames = block.size / 2
+        if (frames >= needed) {
+            System.arraycopy(block, (frames - needed) * 2, meterWindow, 0, needed * 2)
+            meterFrames = needed
+        } else {
+            val keep = minOf(meterFrames, needed - frames)
+            System.arraycopy(meterWindow, (meterFrames - keep) * 2, meterWindow, 0, keep * 2)
+            System.arraycopy(block, 0, meterWindow, keep * 2, frames * 2)
+            meterFrames = keep + frames
+        }
+        framesSinceMeter += frames
+        if (meterFrames == needed && framesSinceMeter >= METER_EVERY_FRAMES) {
+            framesSinceMeter = 0
+            spectrum.feed(meterWindow)
         }
     }
 
@@ -417,27 +658,36 @@ class PlaybackEngine {
      */
     private var pcmScratch = ByteArray(0)
 
-    private fun toBytes(samples: FloatArray): ByteArray {
+    /** [samples] as 16-bit PCM at the start of [pcmScratch]; returns how many of its bytes that is. */
+    private fun toBytes(samples: FloatArray): Int {
         val needed = samples.size * 2
-        if (pcmScratch.size != needed) pcmScratch = ByteArray(needed)
+        // Only ever grows: once the stretcher is on, blocks come in more than one size.
+        if (pcmScratch.size < needed) pcmScratch = ByteArray(needed)
         val out = pcmScratch
         for (i in samples.indices) {
             val clamped = (samples[i].coerceIn(-1f, 1f) * 32767f).toInt()
             out[i * 2] = (clamped and 0xFF).toByte()
             out[i * 2 + 1] = ((clamped shr 8) and 0xFF).toByte()
         }
-        return out
+        return needed
     }
 
     private fun reopenLines() {
         closeLines()
         val targets = outputs.ifEmpty { listOf(DesktopAudioOutput("System default", null)) }
-        lines = targets.mapNotNull { AudioDevices.openLine(it) }
+        lines = targets.mapNotNull { AudioDevices.openLine(it, format) }
+        lines.firstOrNull()?.let { pacing.fit(it.bufferSize / it.format.frameSize, BLOCK_FRAMES) }
     }
 
+    /**
+     * Flushed, not drained: what is still queued belongs to a song being stopped
+     * or a device being left. Draining waited for it to play out, and [stop] runs
+     * on the UI thread, so every change of song froze the window for as long as
+     * the line held - a fifth of a second and more.
+     */
     private fun closeLines() {
         lines.forEach {
-            runCatching { it.drain() }
+            runCatching { it.flush() }
             runCatching { it.stop() }
             runCatching { it.close() }
         }
@@ -446,6 +696,23 @@ class PlaybackEngine {
 
     fun release() {
         stop()
+    }
+
+    private companion object {
+        /**
+         * Frames decoded and processed at a time: 23 ms. Effect settings are read
+         * once a block, so this is also the longest a change waits to be picked up.
+         */
+        const val BLOCK_FRAMES = 1024
+
+        /** About 93 ms: how often the meter is read, which its fall rate is tuned to. */
+        const val METER_EVERY_FRAMES = 4096
+
+        const val STOP_WAIT_MS = 600L
+        const val PAUSED_PARK_NANOS = 250_000_000L
+
+        /** The longest single sleep while waiting for room, so nothing waits on a stale estimate. */
+        const val MAX_WAIT_SLICE_NANOS = 20_000_000L
     }
 }
 
@@ -458,8 +725,8 @@ class PlaybackEngine {
  * audibly in the middle. Cosine and sine keep the sum of squares at one.
  *
  * The level is worked out once at each end of the buffer and interpolated
- * across it, rather than a cosine per sample - a buffer is about a tenth of a
- * second, which is far too coarse a step to hear a seam in, and this is the
+ * across it, rather than a cosine per sample - a buffer is a few hundredths of
+ * a second, which is far too fine a step to hear a seam in, and this is the
  * thread feeding the speakers.
  */
 internal fun mixFade(

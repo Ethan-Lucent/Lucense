@@ -3,7 +3,6 @@ package com.exo.musicplayer.desktop.data
 import com.exo.musicplayer.desktop.system.Platform
 import com.exo.musicplayer.desktop.system.Mpris
 import com.exo.musicplayer.desktop.ui.Glass
-import com.exo.musicplayer.desktop.download.OwnSignIn
 import com.exo.musicplayer.desktop.download.YouTubeAhead
 import com.exo.musicplayer.desktop.download.YouTubeSignIn
 import com.exo.musicplayer.data.playlist.ParsedPlaylist
@@ -14,7 +13,6 @@ import com.exo.musicplayer.data.playlist.PlaylistLinks
 import com.exo.musicplayer.data.audio.Trim
 import androidx.compose.ui.graphics.toArgb
 import com.exo.musicplayer.data.art.CoverColour
-import com.exo.musicplayer.data.library.AudioPrint
 import com.exo.musicplayer.data.library.AutoPlaylist
 import com.exo.musicplayer.data.library.SearchQuery
 import com.exo.musicplayer.data.library.Genres
@@ -25,12 +23,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import com.exo.musicplayer.data.archive.ArchiveEntry
-import com.exo.musicplayer.data.archive.MusicArchive
 import com.exo.musicplayer.data.download.DownloadQuality
 import com.exo.musicplayer.data.download.LinkResolver
 import com.exo.musicplayer.data.download.ResolvedLink
-import com.exo.musicplayer.data.library.DuplicateMatcher
 import com.exo.musicplayer.data.library.TelegramName
 import com.exo.musicplayer.data.lyrics.GeniusLyricsProvider
 import com.exo.musicplayer.data.lyrics.LrcLibProvider
@@ -72,7 +67,6 @@ import com.exo.musicplayer.desktop.audio.DesktopAudioOutput
 import com.exo.musicplayer.desktop.audio.MediaAudio
 import com.exo.musicplayer.desktop.audio.SampleOutcome
 import com.exo.musicplayer.data.youtube.PipedYouTubeBackend
-import com.exo.musicplayer.data.youtube.YouTubeFormat
 import com.exo.musicplayer.data.youtube.YouTubeLinkFinder
 import com.exo.musicplayer.data.youtube.YouTubeSearch
 import com.exo.musicplayer.data.youtube.YouTubeVideo
@@ -82,11 +76,7 @@ import com.exo.musicplayer.data.lyrics.LyricsTranslator
 import com.exo.musicplayer.data.lyrics.SavedTranslations
 import com.exo.musicplayer.data.lyrics.LrcParser
 import com.exo.musicplayer.data.youtube.PreviewLabel
-import java.util.concurrent.atomic.AtomicInteger
-import com.exo.musicplayer.desktop.download.DownloadArchive
 import androidx.compose.runtime.mutableStateMapOf
-import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.sync.Semaphore
 import com.exo.musicplayer.data.discover.Discovery
 import com.exo.musicplayer.data.discover.DiscoverTrack
 import com.exo.musicplayer.data.discover.DiscoverBrowser
@@ -95,12 +85,10 @@ import com.exo.musicplayer.desktop.audio.SongGraph
 import com.exo.musicplayer.desktop.download.DesktopYouTubeBackend
 import com.exo.musicplayer.desktop.audio.PlaybackEngine
 import com.exo.musicplayer.desktop.audio.Volume
-import com.exo.musicplayer.desktop.download.DownloadProgress
 import com.exo.musicplayer.desktop.download.ToolStatus
 import com.exo.musicplayer.desktop.download.YtDlp
 import com.exo.musicplayer.desktop.library.AudioKind
 import com.exo.musicplayer.desktop.library.FolderWatcher
-import com.exo.musicplayer.desktop.library.PrintReader
 import com.exo.musicplayer.desktop.system.DiscordPresence
 import com.exo.musicplayer.desktop.system.FileAssociations
 import com.exo.musicplayer.desktop.system.DuckKey
@@ -133,60 +121,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
-
-/** How the library table is ordered. */
-enum class SortMode(val label: String) {
-    ARTIST("Artist"),
-    TITLE("Title"),
-    ALBUM("Album"),
-    DURATION("Duration"),
-    PLAYS("Times played"),
-    LISTEN_TIME("Time listened"),
-    ADDED("Date added"),
-    RATING("Rating"),
-    YEAR("Year")
-}
-
-/** Progress of one of the bulk tools. */
-data class BulkJob(
-    val label: String = "",
-    val running: Boolean = false,
-    val total: Int = 0,
-    val done: Int = 0,
-    val updated: Int = 0,
-    val alreadyHad: Int = 0,
-    val skipped: Int = 0,
-    val failed: Int = 0,
-    val current: String = "",
-    val finishedNote: String? = null
-) {
-    val progress: Float get() = if (total > 0) done.toFloat() / total else 0f
-}
-
-/** One line in the download window's history. */
-data class DownloadEntry(
-    val id: Long,
-    val target: String,
-    var display: String,
-    var percent: Float = 0f,
-    var status: String = "Queued",
-    var done: Boolean = false,
-    var failed: Boolean = false,
-    var files: List<File> = emptyList(),
-    var note: String? = null,
-    /** The song it was asked for by name, when it was: kept so a retry asks the same way. */
-    val song: YouTubeLinkFinder.Wanted? = null,
-    /** A playlist's songs that weren't downloaded, for "Retry the missed". */
-    var missed: Int = 0
-)
-
-/** A duplicate set as the desktop sees it. */
-data class DesktopDuplicateGroup(val keep: DesktopTrack, val remove: List<DesktopTrack>)
+import com.exo.musicplayer.desktop.system.SongNotifications
 
 /**
  * Everything the Windows UI reads and acts on.
@@ -229,7 +170,7 @@ class DesktopController(parent: CoroutineScope) {
 
     val settings = DesktopSettings()
     val store = DesktopStore(AppDirs.database)
-    val engine = PlaybackEngine()
+    val engine = PlaybackEngine(AudioDevices.playbackRate(settings.outputRate))
 
     /** The playing song read ahead, for the Waves background. */
     val songGraph = SongGraph(engine)
@@ -476,7 +417,7 @@ class DesktopController(parent: CoroutineScope) {
             SortMode.LISTEN_TIME -> filtered.sortedByDescending {
                 listenTimes[it.file.absolutePath] ?: 0L
             }
-            SortMode.ADDED -> filtered.sortedByDescending { it.file.lastModified() }
+            SortMode.ADDED -> filtered.newestFirst()
             SortMode.RATING -> filtered.sortedWith(
                 compareByDescending<DesktopTrack> { ratings[it.file.absolutePath] ?: 0 }
                     .thenBy { it.title.lowercase() }
@@ -568,7 +509,9 @@ class DesktopController(parent: CoroutineScope) {
         plays = playCounts[track.file.absolutePath] ?: 0,
         rating = ratings[track.file.absolutePath] ?: 0,
         year = track.year,
-        addedAt = track.file.lastModified(),
+        // Asked of the disk only when the rule has an added: term. This runs for
+        // every song on every keystroke in the search box, on the UI thread.
+        addedAt = if (query.addedWithinDays != null) track.file.lastModified() else 0L,
         genre = track.genre
     )
 
@@ -685,30 +628,62 @@ class DesktopController(parent: CoroutineScope) {
     /** Whether the folders are being watched, for the Settings line that says so. */
     val watchingFolders: Boolean get() = watcher.watching
 
+    /** The scan running now, if any; [rescanWanted] when another was asked for meanwhile. */
+    private var scanJob: Job? = null
+    private var rescanWanted = false
+
     fun rescan() {
-        // The download folder always counts, so anything downloaded is in the
-        // library whether or not that folder was ever added by hand.
-        val roots = (folders + settings.downloadDir)
-            .map(::File)
-            .filter { it.isDirectory }
-            .distinctBy { it.absoluteFile.normalize().path.lowercase() }
-        if (roots.isEmpty()) {
-            tracks = emptyList()
-            scanning = false
-            return
-        }
+        // Decided on the scope's own thread, so two requests can't both start a
+        // scan. Two at once each wrote the library when done - the older possibly
+        // last - and the first to finish said scanning had stopped while the other
+        // went on. One asked for during a scan runs straight after it, with the
+        // folders as they are by then, rather than cancelling it, which a stream
+        // of downloads could otherwise do for as long as it lasted.
         scope.launch {
-            scanning = true
-            scanned = 0
-            val found = FolderLibrary.scan(roots) { count, name ->
-                // Called from the IO dispatcher; only cheap value writes here.
-                scanned = count
-                scanningName = name
+            if (scanJob?.isActive == true) {
+                rescanWanted = true
+                return@launch
             }
-            tracks = found
-            scanning = false
-            refreshAggregates()
-            restorePlace()
+            scanJob = coroutineContext[Job]
+            do {
+                rescanWanted = false
+                // The download folder always counts, so anything downloaded is in the
+                // library whether or not that folder was ever added by hand.
+                val roots = roots()
+                if (roots.isEmpty()) {
+                    tracks = emptyList()
+                    scanning = false
+                    break
+                }
+                scanning = true
+                scanned = 0
+                val known = io { runCatching { store.libraryCache() }.getOrDefault(emptyMap()) }
+                // At startup, the library as the last scan left it, straight away,
+                // while this one makes sure of it - which, with nothing changed, is
+                // a stat per file rather than every tag read again.
+                if (tracks.isEmpty() && known.isNotEmpty()) {
+                    val inRoots = roots.map { it.absolutePath + File.separator }
+                    tracks = known.entries
+                        .filter { (path, entry) -> entry.track != null && inRoots.any { path.startsWith(it) } }
+                        .mapNotNull { it.value.track }
+                        .sortedWith(FolderLibrary.ORDER)
+                    refreshAggregates()
+                    if (tracks.any { it.file.absolutePath == settings.lastTrack }) restorePlace()
+                }
+                val (found, kept) = FolderLibrary.scan(roots, known, { count, name ->
+                    // Called from the IO dispatcher; only cheap value writes here.
+                    scanned = count
+                    scanningName = name
+                })
+                tracks = found
+                scanning = false
+                io {
+                    runCatching { store.saveLibraryCache(kept) }
+                        .onFailure { System.err.println("Lucense: the library cache wasn't saved: ${it.message}") }
+                }
+                refreshAggregates()
+                restorePlace()
+            } while (rescanWanted)
         }
     }
 
@@ -788,18 +763,7 @@ class DesktopController(parent: CoroutineScope) {
         get() = fxState.value
         set(value) {
             fxState.value = value
-            engine.effects.speed = value.speed
-            engine.effects.pitchSemitones = value.pitchSemitones
-            engine.effects.reverb.enabled = value.reverbEnabled
-            engine.effects.reverb.mix = value.reverbMix
-            engine.effects.reverb.decay = value.reverbDecay
-            engine.effects.equalizer.enabled = value.eqEnabled
-            engine.effects.equalizer.setGains(value.eqGains)
-            engine.effects.character.drive = value.drive
-            engine.effects.character.lofi = value.lofi
-            engine.effects.character.tremolo = value.tremolo
-            engine.effects.character.rotate = value.rotate
-            engine.effects.character.echo = value.echo
+            engine.effects.use(value)
         }
 
     private val volumeState = mutableStateOf(settings.volume)
@@ -1014,7 +978,7 @@ class DesktopController(parent: CoroutineScope) {
      * most of the library, which is a queue nobody asked for.
      */
     fun autoPlaylist(kind: AutoPlaylist): List<DesktopTrack> = when (kind) {
-        AutoPlaylist.RECENT -> tracks.sortedByDescending { it.file.lastModified() }.take(60)
+        AutoPlaylist.RECENT -> tracks.newestFirst().take(60)
         AutoPlaylist.MOST_PLAYED -> tracks
             .filter { (playCounts[it.file.absolutePath] ?: 0) > 0 }
             .sortedByDescending { playCounts[it.file.absolutePath] ?: 0 }
@@ -1040,6 +1004,7 @@ class DesktopController(parent: CoroutineScope) {
         set(value) {
             shuffleState.value = value
             settings.shuffle = value
+            tellDesktopPlayer()
             // Shuffled around whatever is playing rather than from the top, so
             // turning it on doesn't cut the current track off, and turning it
             // off puts the rest of the list back in its own order.
@@ -1053,12 +1018,27 @@ class DesktopController(parent: CoroutineScope) {
         get() = repeatState.value
         set(value) {
             repeatState.value = value
+            tellDesktopPlayer()
             settings.repeat = value.name
             // Repeat one means the next song is this one again, and repeat all
             // means the end of the list runs back to the top; both change what
             // the engine should be holding ready.
             refreshUpNext()
         }
+
+    /**
+     * The A-B button: A at what is playing now, then B and round from A, then
+     * off. Off carries on from wherever in the loop playback had got to.
+     */
+    fun cycleAbLoop() {
+        val status = engine.status.value
+        if (status.track == null) return
+        when {
+            status.loopEndMs != null -> engine.clearLoop()
+            status.loopStartMs != null -> engine.closeLoop()
+            else -> engine.openLoop()
+        }
+    }
 
     fun cycleRepeat() {
         repeat = when (repeat) {
@@ -1660,7 +1640,32 @@ class DesktopController(parent: CoroutineScope) {
             }
         }
         override fun positionMs(): Long = engine.status.value.positionMs
+        override fun setShuffle(on: Boolean) { scope.launch { shuffle = on } }
+        override fun setLoop(status: String) {
+            scope.launch {
+                repeat = when (status) {
+                    Mpris.LOOP_TRACK -> RepeatMode.ONE
+                    Mpris.LOOP_PLAYLIST -> RepeatMode.ALL
+                    else -> RepeatMode.OFF
+                }
+            }
+        }
     })
+
+    private val songNotifications: SongNotifications? = if (Platform.isLinux) SongNotifications() else null
+
+    private val notifySongsState = mutableStateOf(settings.notifySongs)
+
+    /** Whether a song starting shows as a desktop notification; Linux only. */
+    var notifySongs: Boolean
+        get() = notifySongsState.value
+        set(value) {
+            notifySongsState.value = value
+            settings.notifySongs = value
+        }
+
+    /** The song last announced, so each is announced once. */
+    private var notifiedKey: String? = null
 
     /** Tells the Linux desktop what is playing, for its media controls; nothing elsewhere. */
     private fun tellDesktopPlayer() {
@@ -1677,15 +1682,29 @@ class DesktopController(parent: CoroutineScope) {
                 album = track?.album?.takeIf { it.isNotBlank() },
                 lengthMs = status.durationMs.takeIf { it > 0L } ?: track?.durationMs ?: 0L,
                 playing = status.playing,
-                artUrl = cover?.ifBlank { null }
+                artUrl = cover?.ifBlank { null },
+                shuffle = shuffle,
+                loop = when (repeat) {
+                    RepeatMode.ONE -> Mpris.LOOP_TRACK
+                    RepeatMode.ALL -> Mpris.LOOP_PLAYLIST
+                    RepeatMode.OFF -> Mpris.LOOP_NONE
+                }
             ),
             status.positionMs
         )
+        // Once per song, while it plays - not for the one put back at startup - and
+        // once its cover has been looked for: null is "not yet", blank is "none".
+        if (notifySongs && track != null && key != null && key != notifiedKey && status.playing && cover != null) {
+            notifiedKey = key
+            songNotifications?.show(track.title, track.displayArtist, cover.ifBlank { null })
+        }
         if (track != null && key != null && cover == null) {
             desktopCovers[key] = ""
             scope.launch {
                 val file = withContext(Dispatchers.IO) { coverForDesktop(track) } ?: return@launch
-                desktopCovers[key] = file.toURI().toString()
+                // file:///..., as GLib wants it: File.toURI's file:/... isn't read as a file by GNOME,
+                // which then showed no cover in the media controls or in notifications.
+                desktopCovers[key] = file.toPath().toUri().toString()
                 if (engine.status.value.track?.file?.absolutePath == key) tellDesktopPlayer()
             }
         }
@@ -2219,9 +2238,6 @@ class DesktopController(parent: CoroutineScope) {
      */
     private val linkFinder = YouTubeLinkFinder(youtube)
 
-    /** A `ytsearch1:` prefix left over from before, accepted and ignored. */
-    private val searchPrefix = Regex("""^ytsearch\d*:""", RegexOption.IGNORE_CASE)
-
     val preview = PreviewPlayer { ToolPaths.ffmpeg }
 
     var youtubeResults by mutableStateOf<List<YouTubeVideo>>(emptyList())
@@ -2323,7 +2339,7 @@ class DesktopController(parent: CoroutineScope) {
     /** Downloads the song being streamed, to keep it. */
     fun keepStreamed() {
         val item = streamQueue?.current ?: return
-        item.link?.let { queueDownload(it, song = null) } ?: downloadSong(item.artist.orEmpty(), item.title, item.durationMs)
+        item.link?.let { downloader.queueDownload(it, song = null) } ?: downloadSong(item.artist.orEmpty(), item.title, item.durationMs)
     }
 
     private fun playStreamAt(queue: StreamQueue, at: Int) {
@@ -2395,15 +2411,23 @@ class DesktopController(parent: CoroutineScope) {
     }
 
     /**
-     * Saves [startMs] to [endMs] of [track] as a new song beside it, cut rather
-     * than encoded again, and adds it to the library.
+     * Saves [startMs] to [endMs] of [track] as a new song beside it, and adds it
+     * to the library: cut rather than encoded again - or, [withEffects], played
+     * through the effects on now and encoded again (EffectTrim).
      */
-    suspend fun saveTrim(track: DesktopTrack, startMs: Long, endMs: Long): Result<File> = withContext(Dispatchers.IO) {
+    suspend fun saveTrim(
+        track: DesktopTrack,
+        startMs: Long,
+        endMs: Long,
+        withEffects: Boolean = false
+    ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val ffmpeg = ToolPaths.ffmpeg
             check(ffmpeg.isFile) { "ffmpeg is missing, and it does the cutting. The Download page can fetch it." }
             // Beside the original, unless that folder can't be written to.
             val dir = track.file.parentFile?.takeIf { it.canWrite() } ?: File(settings.downloadDir).apply { mkdirs() }
+            val effects = fx
+            if (withEffects && !effects.isDefault) return@runCatching saveTrimWithEffects(track, startMs, endMs, effects, ffmpeg, dir)
             val out = File(dir, Trim.outputName(track.file.name) { File(dir, it).exists() })
             val process = ProcessBuilder(
                 listOf(ffmpeg.absolutePath) +
@@ -2418,6 +2442,36 @@ class DesktopController(parent: CoroutineScope) {
             addToLibrary(listOf(out))
             out
         }
+    }
+
+    private fun saveTrimWithEffects(
+        track: DesktopTrack,
+        startMs: Long,
+        endMs: Long,
+        effects: DesktopFxState,
+        ffmpeg: File,
+        dir: File
+    ): File {
+        val label = EffectTrim.describe(effects)
+        val ext = EffectTrim.extension(track.file)
+        val stem = track.file.nameWithoutExtension
+        var out = File(dir, "$stem ($label).$ext")
+        var n = 2
+        while (out.exists()) out = File(dir, "$stem ($label ${n++}).$ext")
+        val process = ProcessBuilder(listOf(ffmpeg.absolutePath) + EffectTrim.ffmpegArgs(track.file, out, "${track.title} ($label)"))
+            .redirectErrorStream(true).start()
+        // Read as it comes, so ffmpeg never stalls on a full pipe while being fed.
+        val log = StringBuilder()
+        val reader = kotlin.concurrent.thread(isDaemon = true) { log.append(process.inputStream.bufferedReader().readText()) }
+        val fed = runCatching { process.outputStream.buffered().use { EffectTrim.render(track.file, startMs, endMs, effects, it) } }
+        val code = process.waitFor()
+        reader.join(2_000)
+        if (fed.isFailure || code != 0 || !out.isFile || out.length() == 0L) {
+            out.delete()
+            error(fed.exceptionOrNull()?.message ?: log.lines().lastOrNull { it.isNotBlank() } ?: "ffmpeg stopped with code $code.")
+        }
+        addToLibrary(listOf(out))
+        return out
     }
 
     /** Hands the video to the existing downloader, in the chosen format at the set quality. */
@@ -3730,897 +3784,84 @@ class DesktopController(parent: CoroutineScope) {
         }
     }
 
-    // ---- Downloads ----------------------------------------------------------
-
-    var tools by mutableStateOf(ToolStatus())
-        private set
-    var toolNote by mutableStateOf<String?>(null)
-        private set
-    var toolProgress by mutableStateOf<Float?>(null)
-        private set
-    var downloadUrl by mutableStateOf("")
-    private val formatState = mutableStateOf(
-        settings.downloadFormatName.takeIf { it != ORIGINAL_FORMAT }?.let(DownloadFormat::fromName)
-    )
-
-    /** What downloads are converted to; null keeps whatever the site served. */
-    var downloadFormat: DownloadFormat?
-        get() = formatState.value
-        set(value) {
-            formatState.value = value
-            settings.downloadFormatName = value?.name ?: ORIGINAL_FORMAT
-        }
-
-    private val cutNonMusicState = mutableStateOf(settings.downloadCutNonMusic)
-
-    /** Whether SponsorBlock's non-music parts of music videos are cut out. */
-    var downloadCutNonMusic: Boolean
-        get() = cutNonMusicState.value
-        set(value) {
-            cutNonMusicState.value = value
-            settings.downloadCutNonMusic = value
-        }
     // ---- YouTube sign-in, for VPN addresses YouTube refuses -----------------
+    //
+    // Kept in YouTubeSignInSettings (made here, where its settings used to be
+    // read, so YouTubeSignIn is set up at the same point as before); these hand
+    // the UI's calls through to it.
 
-    private val signInState = mutableStateOf(YouTubeSignIn.Source.of(settings.youtubeSignIn))
-    private val cookieFileState = mutableStateOf(settings.youtubeCookieFile)
+    private val signIn = YouTubeSignInSettings(scope, settings)
 
-    init {
-        YouTubeSignIn.source = signInState.value
-        YouTubeSignIn.cookieFile = cookieFileState.value.takeIf { it.isNotBlank() }?.let(::File)
-    }
-
-    /** Which sign-in yt-dlp downloads with. */
     var youtubeSignIn: YouTubeSignIn.Source
-        get() = signInState.value
-        set(value) {
-            signInState.value = value
-            settings.youtubeSignIn = value.name
-            YouTubeSignIn.source = value
-            signInNote = null
-            signInKeptAt = keptAtFor(value)
-        }
-
-    /** The cookies.txt file, when that is the sign-in. */
+        get() = signIn.youtubeSignIn
+        set(value) { signIn.youtubeSignIn = value }
     var youtubeCookieFile: String
-        get() = cookieFileState.value
-        set(value) {
-            cookieFileState.value = value
-            settings.youtubeCookieFile = value
-            YouTubeSignIn.cookieFile = value.takeIf { it.isNotBlank() }?.let(::File)
-            signInNote = null
-        }
+        get() = signIn.youtubeCookieFile
+        set(value) { signIn.youtubeCookieFile = value }
+    val signInNote: String? get() = signIn.signInNote
+    val checkingSignIn: Boolean get() = signIn.checkingSignIn
+    val signInKeptAt: Long? get() = signIn.signInKeptAt
+    val signingIn: Boolean get() = signIn.signingIn
 
-    /** What the last check of the sign-in found. */
-    var signInNote by mutableStateOf<String?>(null)
-        private set
-    var checkingSignIn by mutableStateOf(false)
-        private set
+    fun checkYouTubeSignIn() = signIn.checkYouTubeSignIn()
+    fun signInHere() = signIn.signInHere()
+    fun stopSigningIn() = signIn.stopSigningIn()
+    fun doneSigningIn() = signIn.doneSigningIn()
+    fun forgetYouTubeSignIn() = signIn.forgetYouTubeSignIn()
 
-    /** When the kept sign-in was made or last renewed, for the panel; null when there is none for the chosen source. */
-    var signInKeptAt by mutableStateOf(keptAtFor(signInState.value))
-        private set
+    // ---- Downloads ----------------------------------------------------------
+    //
+    // Kept in Downloader: the download choices, yt-dlp and ffmpeg, and the
+    // queue. These hand the UI's calls through to it.
 
-    private fun keptAtFor(chosen: YouTubeSignIn.Source): Long? =
-        YouTubeSignIn.keptAt()?.takeIf { YouTubeSignIn.keptSource() == chosen }
+    private val downloader = Downloader(
+        scope = scope,
+        settings = settings,
+        youtubeBackend = youtubeBackend,
+        linkFinder = linkFinder,
+        signIn = signIn,
+        addToLibrary = { files -> addToLibrary(files) },
+        rescan = { rescan() }
+    )
 
-    /** A sign-in window is open, waiting for the account. */
-    var signingIn by mutableStateOf(false)
-        private set
-
-    /**
-     * Asks YouTube for a page only a signed-in account sees, with the sign-in
-     * as it is set. For a browser, the same run makes Lucense's copy of its
-     * sign-in, so this is also how the copy is renewed by hand.
-     */
-    fun checkYouTubeSignIn() {
-        if (checkingSignIn || signingIn) return
-        val chosen = youtubeSignIn
-        if (chosen == YouTubeSignIn.Source.OFF) {
-            signInNote = "Choose where the sign-in comes from first."
-            return
-        }
-        if (chosen == YouTubeSignIn.Source.FILE && !YouTubeSignIn.active) {
-            signInNote = "Choose the cookies.txt file first."
-            return
-        }
-        if (chosen == YouTubeSignIn.Source.OWN && !YouTubeSignIn.active) {
-            signInNote = "Sign in first."
-            return
-        }
-        if (!ToolPaths.ytDlp.isFile) {
-            signInNote = "Install yt-dlp first."
-            return
-        }
-        checkingSignIn = true
-        signInNote = if (chosen.copied) "Copying ${chosen.label}'s sign-in and checking it with YouTube…" else "Checking with YouTube…"
-        scope.launch {
-            val error = if (chosen.copied) copySignIn(chosen) else runSignInCheck(YouTubeSignIn.ytDlpArgs())
-            signInNote = YouTubeSignIn.explain(error, chosen)
-            signInKeptAt = keptAtFor(chosen)
-            checkingSignIn = false
-        }
-    }
-
-    /** yt-dlp's errors from asking for the check page with [signIn], or blank when it worked. */
-    private suspend fun runSignInCheck(signIn: List<String>): String = io {
-        runCatching {
-            val process = ProcessBuilder(
-                listOf(ToolPaths.ytDlp.absolutePath) + YouTubeSignIn.CHECK_ARGUMENTS + NetworkProxy.ytDlpArgs() + signIn
-            ).redirectErrorStream(false).also(NetworkProxy::configure).start()
-            val drain = Thread { process.inputStream.use { it.readBytes() } }.apply { isDaemon = true; start() }
-            val err = process.errorStream.bufferedReader().use { it.readText() }
-            process.waitFor()
-            drain.join(2_000)
-            err.lineSequence().filter { it.trim().startsWith("ERROR") }.joinToString("\n")
-        }.getOrElse { "ERROR: ${it.message}" }
-    }
-
-    /**
-     * Copies [chosen]'s sign-in into Lucense's own file while checking it:
-     * yt-dlp reads the browser and writes everything it read into a scratch
-     * file, of which YouTube's and Google's cookies are kept and the rest
-     * deleted straight away. Blank when it worked.
-     */
-    private suspend fun copySignIn(chosen: YouTubeSignIn.Source): String {
-        val scratch = YouTubeSignIn.scratch()
-        return try {
-            val error = runSignInCheck(YouTubeSignIn.copyArguments(chosen, scratch))
-            when {
-                error.isNotBlank() -> error
-                !io { YouTubeSignIn.keep(scratch, chosen) } -> "ERROR: Login details are needed"
-                else -> ""
-            }
-        } finally {
-            io { scratch.delete() }
-        }
-    }
-
-    /**
-     * Renews a browser's copy without a word when it is due, or when YouTube
-     * has just refused a download - at most every half hour. If the browser
-     * holds its cookies locked just then, the copy there is kept and used.
-     */
-    private fun renewSignInQuietly(refused: Boolean = false) {
-        val chosen = youtubeSignIn
-        if (!chosen.copied || checkingSignIn || !ToolPaths.ytDlp.isFile) return
-        if (!refused && !YouTubeSignIn.needsRenewal()) return
-        val now = System.currentTimeMillis()
-        if (now - lastQuietRenewal < QUIET_RENEWAL_GAP_MS) return
-        lastQuietRenewal = now
-        scope.launch {
-            if (copySignIn(chosen).isBlank()) signInKeptAt = keptAtFor(chosen)
-        }
-    }
-
-    private var lastQuietRenewal = 0L
-
-    init {
-        // A copy past its time is renewed once Lucense is up, out of the way.
-        scope.launch {
-            delay(20_000)
-            renewSignInQuietly()
-        }
-    }
-
-    /** Opens a browser window of Lucense's own to sign in to YouTube once ([OwnSignIn]). */
-    fun signInHere() {
-        if (signingIn || checkingSignIn) return
-        signingIn = true
-        signInNote = "Opening a browser window…"
-        scope.launch {
-            val outcome = OwnSignIn.signIn(NetworkProxy.urlFor()) { status -> scope.launch { signInNote = status } }
-            signingIn = false
-            when (outcome) {
-                OwnSignIn.Outcome.Kept -> {
-                    signInKeptAt = keptAtFor(YouTubeSignIn.Source.OWN)
-                    signInNote = "Signed in. Checking with YouTube…"
-                    checkingSignIn = true
-                    val error = runSignInCheck(YouTubeSignIn.ytDlpArgs())
-                    signInNote = YouTubeSignIn.explain(error, YouTubeSignIn.Source.OWN)
-                    checkingSignIn = false
-                }
-                OwnSignIn.Outcome.Stopped -> signInNote = "Stopped; nothing was kept."
-                OwnSignIn.Outcome.NotSignedIn -> signInNote =
-                    "The window closed before YouTube was signed in to, so nothing was kept. Sign in again, and close " +
-                        "the window (or press Done) once YouTube shows your account."
-                is OwnSignIn.Outcome.Failed -> signInNote = outcome.why
-            }
-        }
-    }
-
-    /** Closes a sign-in window that is still waiting. */
-    fun stopSigningIn() = OwnSignIn.stop()
-
-    /** Signed in, in the window: it is closed and the sign-in read. */
-    fun doneSigningIn() = OwnSignIn.done()
-
-    /** Forgets the kept sign-in: Lucense's copy is deleted, and downloads go signed out. */
-    fun forgetYouTubeSignIn() {
-        YouTubeSignIn.forget()
-        signInKeptAt = null
-        signInNote = "Signed out: Lucense's copy of the sign-in is deleted."
-    }
-
-    private val embedArtState = mutableStateOf(settings.downloadEmbedArt)
-
-    /** Kept, like the rest of the download choices, so they are as left next time. */
+    val tools: ToolStatus get() = downloader.tools
+    var toolNote: String?
+        get() = downloader.toolNote
+        private set(value) { downloader.toolNote = value }
+    val toolProgress: Float? get() = downloader.toolProgress
+    var downloadUrl: String
+        get() = downloader.downloadUrl
+        set(value) { downloader.downloadUrl = value }
+    var downloadFormat: DownloadFormat?
+        get() = downloader.downloadFormat
+        set(value) { downloader.downloadFormat = value }
+    var downloadCutNonMusic: Boolean
+        get() = downloader.downloadCutNonMusic
+        set(value) { downloader.downloadCutNonMusic = value }
     var downloadEmbedArt: Boolean
-        get() = embedArtState.value
-        set(value) {
-            embedArtState.value = value
-            settings.downloadEmbedArt = value
-        }
-
-    private val wholePlaylistState = mutableStateOf(settings.downloadPlaylist)
-
+        get() = downloader.downloadEmbedArt
+        set(value) { downloader.downloadEmbedArt = value }
     var downloadPlaylist: Boolean
-        get() = wholePlaylistState.value
-        set(value) {
-            wholePlaylistState.value = value
-            settings.downloadPlaylist = value
-        }
-
-    private val qualityState = mutableStateOf(
-        DownloadQuality.fromName(settings.downloadQualityName)
-    )
+        get() = downloader.downloadPlaylist
+        set(value) { downloader.downloadPlaylist = value }
     var downloadQuality: DownloadQuality
-        get() = qualityState.value
-        set(value) {
-            qualityState.value = value
-            settings.downloadQualityName = value.name
-        }
-    /** Finished downloads the Download page has already shown. */
-    private var acknowledgedDownloads by mutableStateOf<Set<Long>>(emptySet())
+        get() = downloader.downloadQuality
+        set(value) { downloader.downloadQuality = value }
+    val unseenFinishedDownloads: Int get() = downloader.unseenFinishedDownloads
+    val downloads: List<DownloadEntry> get() = downloader.downloads
+    val downloadLog: List<String> get() = downloader.downloadLog
+    val downloadDir: String get() = downloader.downloadDir
 
-    /** Downloads that finished since the Download page was last looked at. */
-    val unseenFinishedDownloads: Int
-        get() = downloads.count { it.done && !it.failed && it.id !in acknowledgedDownloads }
-
-    fun acknowledgeDownloads() {
-        val finished = downloads.filter { it.done }.map { it.id }.toSet()
-        // Written only on change: this runs from an effect keyed on the list, and
-        // an unconditional write would keep re-triggering it.
-        if (!acknowledgedDownloads.containsAll(finished)) {
-            acknowledgedDownloads = acknowledgedDownloads + finished
-        }
-    }
-
-    var downloads by mutableStateOf<List<DownloadEntry>>(emptyList())
-        private set
-    var downloadLog by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    fun refreshTools() {
-        scope.launch {
-            tools = io { YtDlp.status() }
-            if (tools.ytDlp) tools = tools.copy(ytDlpVersion = YtDlp.version())
-        }
-    }
-
-    /**
-     * Looks for a newer yt-dlp when the one here hasn't been checked for a
-     * couple of days. YouTube changes under it every few weeks, and the usual
-     * sign is every download failing at once; nobody should have to know
-     * there is an update button to get past that. Quiet: it says nothing
-     * unless it installed something.
-     */
-    private fun updateYtDlpIfStale() {
-        scope.launch {
-            val mark = File(AppDirs.tools, "yt-dlp.checked")
-            val stale = System.currentTimeMillis() - mark.lastModified() > YT_DLP_STALE_AFTER_MS
-            if (!stale || !io { ToolPaths.ytDlp.isFile }) return@launch
-            val before = YtDlp.version()
-            val result = YtDlp.update { }
-            if (result.isSuccess) {
-                io { runCatching { mark.writeText(System.currentTimeMillis().toString()) } }
-                val after = YtDlp.version()
-                if (after != null && after != before) toolNote = "yt-dlp updated itself to $after."
-                refreshTools()
-            }
-        }
-    }
-
-    fun updateYtDlp() {
-        scope.launch {
-            toolNote = "Updating yt-dlp…"
-            val result = YtDlp.update { line -> downloadLog = (downloadLog + line).takeLast(200) }
-            toolNote = result.fold(
-                onSuccess = { "yt-dlp updated." },
-                onFailure = { "Update failed: ${it.message}" }
-            )
-            refreshTools()
-        }
-    }
-
-    /** Queues [rawUrl], resolving Spotify links to a searchable name first. */
-    fun startDownload(rawUrl: String = downloadUrl) {
-        if (queueDownload(rawUrl.trim(), song = null) != null) downloadUrl = ""
-    }
-
-    /**
-     * A song known by its artist, title and length rather than by a link,
-     * which is what Discover has. Found on YouTube first and checked against
-     * all three, then downloaded like anything else. Returns the entry's id,
-     * for following it in [downloads], or null when nothing was queued.
-     */
-    fun downloadSong(artist: String, title: String, durationMs: Long?): Long? = queueDownload(
-        listOf(artist, title).filter { it.isNotBlank() }.joinToString(" - "),
-        YouTubeLinkFinder.Wanted(
-            title = title,
-            artist = artist.takeIf { it.isNotBlank() },
-            durationMs = durationMs?.takeIf { it > 0 }
-        )
-    )
-
-    private companion object {
-        /** A browser's sign-in is copied quietly at most this often. */
-        const val QUIET_RENEWAL_GAP_MS = 30L * 60 * 1000
-
-        /** YouTube refusals in a row before a playlist stops asking it. */
-        const val REFUSALS_BEFORE_GIVING_UP = 5
-
-        /** How long a yt-dlp is trusted before it is checked for a newer one. */
-        const val YT_DLP_STALE_AFTER_MS = 2L * 24 * 60 * 60 * 1000
-
-        /** What the format setting holds for "keep what the site served". */
-        const val ORIGINAL_FORMAT = "ORIGINAL"
-
-        /** Songs in a row that wouldn't stream before a list stops trying. */
-        const val STREAM_FAILURES_TO_STOP = 3
-
-        /** Covers kept as files for the Linux desktop's media controls. */
-        const val DESKTOP_COVERS_KEPT = 20
-
-        /** A kept YouTube address that plays nothing is read again only if it is at least this old. */
-        const val READ_AGAIN_AFTER_MS = 30_000L
-
-        /** How many of Your YouTube's songs, and of an opened mix's, are read ahead. */
-        const val FOR_YOU_AHEAD = 10
-        const val MIX_AHEAD = 5
-
-        /** Songs of a playlist downloading at once. */
-        const val PLAYLIST_WORKERS = 4
-
-        /** The least time between one song of a playlist starting and the next. */
-        const val PLAYLIST_GAP_MS = 1_000L
-
-        /** How long YouTube is left alone after it refuses a song. */
-        const val PLAYLIST_HOLD_MS = 20_000L
-
-        /** How many of a playlist's missed songs are named before "and N more". */
-        const val MISSED_NAMED = 12
-    }
-
-    /**
-     * Songs downloading by name at once. A whole album asked for together
-     * would otherwise be a dozen searches and a dozen yt-dlps side by side.
-     */
-    private val songSlots = Semaphore(2)
-
-    private fun queueDownload(url: String, song: YouTubeLinkFinder.Wanted?): Long? {
-        if (url.isBlank()) return null
-        if (!tools.ready) {
-            toolNote = "Install yt-dlp first — one click, about 12 MB."
-            return null
-        }
-
-        val entry = DownloadEntry(
-            id = System.nanoTime(),
-            target = url,
-            display = url,
-            song = song
-        )
-        synchronized(queueLock) { downloads = downloads + entry }
-
-        scope.launch {
-            if (song != null) {
-                update(entry.id) { it.status = "Waiting…" }
-                songSlots.withPermit { runDownload(entry, url, song) }
-            } else {
-                runDownload(entry, url, null)
-            }
-        }
-        return entry.id
-    }
-
-    /** How one link's download went, and whether YouTube refused the connection on the way. */
-    private class Fetched(val result: Result<List<File>>, val refusedByYouTube: Boolean)
-
-    /**
-     * One link fetched. A failure carries what the site said, rather than how
-     * yt-dlp exited, which is all its own error amounts to.
-     */
-    private suspend fun fetch(
-        target: String,
-        wholePlaylist: Boolean,
-        onProgress: (DownloadProgress) -> Unit
-    ): Fetched {
-        var refused = false
-        var said: String? = null
-        val result = YtDlp.download(
-            target = target,
-            destination = File(settings.downloadDir),
-            format = downloadFormat?.takeIf { tools.ffmpeg },
-            embedThumbnail = downloadEmbedArt,
-            wholePlaylist = wholePlaylist,
-            quality = downloadQuality,
-            cutNonMusic = downloadCutNonMusic,
-            onProgress = { progress ->
-                if (YouTubeTrouble.refused(progress.line) && !refused) {
-                    refused = true
-                    renewSignInQuietly(refused = true)
-                }
-                if (progress.line.startsWith("ERROR")) said = progress.line
-                onProgress(progress)
-            }
-        )
-        val line = said
-        return Fetched(
-            if (result.isFailure && line != null) {
-                Result.failure(
-                    IllegalStateException(
-                        if (LinkResolver.isYouTube(target)) YouTubeTrouble.explain(line) else YouTubeTrouble.reason(line)
-                    )
-                )
-            } else {
-                result
-            },
-            refused && LinkResolver.isYouTube(target)
-        )
-    }
-
-    /**
-     * A playlist, song by song.
-     *
-     * It used to be handed to yt-dlp whole. Nothing was saved until the last
-     * song finished, songs that failed were dropped without a word, and when
-     * YouTube refused the lot - it does after a few dozen downloads in a row -
-     * a hundred songs came back as one failure about "this song". Now each
-     * song is its own download, several at a time, lands in the library as it
-     * finishes, and is remembered, so asking for the same playlist again
-     * fetches only what is missing.
-     */
-    private suspend fun downloadSongsOf(entry: DownloadEntry, link: String) {
-        update(entry.id) { it.status = "Reading the playlist…" }
-        val (playlist, problem) = youtubeBackend.playlist(link)
-        val songs = playlist?.songs.orEmpty()
-        if (songs.isEmpty()) {
-            val said = problem?.let(YouTubeTrouble::reason)?.takeIf { it.isNotBlank() }
-            update(entry.id) {
-                it.done = true
-                it.failed = true
-                it.status = if (said != null) {
-                    "The playlist couldn't be read: $said"
-                } else {
-                    "The playlist couldn't be read. A private playlist has to be made public or unlisted first."
-                }
-            }
-            return
-        }
-        update(entry.id) { it.display = "Playlist · ${playlist?.title ?: link}" }
-
-        val saved = ArrayList<File>()
-        val missed = ArrayList<String>()
-        var already = 0
-        var finished = 0
-
-        // What YouTube will put up with, worked out as it goes. A refusal
-        // makes every worker hold off for a while. Several running mean it is
-        // refusing the connection, and asking for the rest would only prolong
-        // that, so the playlist stops there, to be picked up again later.
-        var refusalsRunning = 0
-        var stopped = false
-        var holdUntil = 0L
-        var lastStart = 0L
-
-        val tally = Mutex()
-        val gate = Mutex()
-        val next = AtomicInteger(0)
-
-        fun report(now: String?) = update(entry.id) {
-            it.status = "$finished of ${songs.size}"
-            if (now != null) it.note = now
-            // Never quite nothing, so the row shows how far it is rather than a bar going nowhere.
-            it.percent = (finished + 0.05f) / songs.size
-            it.files = saved.toList()
-        }
-        report(null)
-
-        // Several at a time, each landing in the library as it finishes. The
-        // songs still start no closer together than the gap, so the speed
-        // comes from overlapping the downloads and conversions rather than
-        // from asking YouTube faster.
-        coroutineScope {
-            repeat(minOf(PLAYLIST_WORKERS, songs.size)) {
-                launch {
-                    while (true) {
-                        if (tally.withLock { stopped }) break
-                        val index = next.getAndIncrement()
-                        if (index >= songs.size) break
-                        val video = songs[index]
-
-                        if (DownloadArchive.fileFor(video.id) != null) {
-                            tally.withLock {
-                                already++
-                                finished++
-                                report(null)
-                            }
-                            continue
-                        }
-
-                        gate.withLock {
-                            val hold = tally.withLock { holdUntil }
-                            val wait = maxOf(lastStart + PLAYLIST_GAP_MS, hold) - System.currentTimeMillis()
-                            if (wait > 0) delay(wait)
-                            lastStart = System.currentTimeMillis()
-                        }
-                        if (tally.withLock { stopped }) break
-                        tally.withLock { report(video.title) }
-
-                        val fetched = fetch(video.watchUrl, wholePlaylist = false) { progress ->
-                            if (progress.line.isNotBlank()) downloadLog = (downloadLog + progress.line).takeLast(200)
-                        }
-                        val files = fetched.result.getOrDefault(emptyList())
-
-                        tally.withLock {
-                            if (files.isEmpty()) {
-                                missed += video.title
-                            } else {
-                                saved += files
-                                DownloadArchive.add(video.id, files.first())
-                            }
-                            if (fetched.refusedByYouTube) {
-                                holdUntil = System.currentTimeMillis() + PLAYLIST_HOLD_MS
-                                if (++refusalsRunning >= REFUSALS_BEFORE_GIVING_UP) stopped = true
-                            } else {
-                                refusalsRunning = 0
-                            }
-                            finished++
-                            report(null)
-                        }
-                        // Into the library as each one lands, not when the last one has.
-                        if (files.isNotEmpty()) addToLibrary(files)
-                    }
-                }
-            }
-        }
-
-        val gone = playlist?.gone ?: 0
-        val untried = songs.size - finished
-        update(entry.id) {
-            it.done = true
-            it.percent = 1f
-            it.files = saved.toList()
-            it.failed = saved.isEmpty() && already == 0
-            it.missed = missed.size + untried
-            it.status = buildString {
-                append("Saved ${saved.size} of ${songs.size}")
-                if (already > 0) append(", $already already downloaded")
-                if (missed.size + untried > 0) append(", ${missed.size + untried} not downloaded")
-            }
-            it.note = listOfNotNull(
-                if (stopped) {
-                    "YouTube began refusing this connection" +
-                        (if (untried > 0) ", so $untried ${if (untried == 1) "song wasn't" else "songs weren't"} tried. " else ". ") +
-                        YouTubeTrouble.WHY_REFUSED +
-                        " Then download the playlist again: the songs already saved are skipped."
-                } else {
-                    null
-                },
-                missed.takeIf { list -> list.isNotEmpty() }?.let { list ->
-                    "Not downloaded: " + list.take(MISSED_NAMED).joinToString("; ") +
-                        if (list.size > MISSED_NAMED) "; and ${list.size - MISSED_NAMED} more." else "."
-                },
-                if (gone > 0) "$gone of the playlist's videos ${if (gone == 1) "is" else "are"} private or deleted." else null
-            ).joinToString("\n").takeIf { text -> text.isNotBlank() }
-        }
-    }
-
-    private suspend fun runDownload(entry: DownloadEntry, url: String, song: YouTubeLinkFinder.Wanted?) {
-        if (isSpotify(url)) {
-            downloadWithSpotdl(entry.id, url)
-            return
-        }
-
-        // A song name rather than a link: found on YouTube first, and the
-        // link that was found is what yt-dlp is given.
-        val target = if (song != null) {
-            update(entry.id) { it.status = "Finding it on YouTube…" }
-            findYouTubeLink(entry.id, song)
-                ?: return
-        } else if (!url.startsWith("http", ignoreCase = true)) {
-            val text = url.replace(searchPrefix, "").trim()
-            update(entry.id) { it.status = "Finding it on YouTube…" }
-            findYouTubeLink(entry.id, YouTubeLinkFinder.Wanted(title = text))
-                ?: return
-        } else when (val resolved = io { LinkResolver.resolve(url) }) {
-            is ResolvedLink.Direct -> {
-                update(entry.id) { it.display = "${resolved.service} · $url" }
-                resolved.url
-            }
-            is ResolvedLink.Search -> {
-                update(entry.id) {
-                    it.display = resolved.display
-                    it.note = resolved.note
-                }
-                findYouTubeLink(entry.id, YouTubeLinkFinder.Wanted(title = resolved.query))
-                    ?: return
-            }
-            is ResolvedLink.Unsupported -> {
-                update(entry.id) {
-                    it.failed = true
-                    it.done = true
-                    it.status = resolved.reason
-                }
-                return
-            }
-        }
-
-        // A playlist is a list of songs, not one long download: each is
-        // fetched, and can fail, on its own.
-        if (song == null && LinkResolver.isYouTubePlaylist(target, downloadPlaylist)) {
-            downloadSongsOf(entry, target)
-            return
-        }
-
-        update(entry.id) { it.status = "Starting…" }
-        val result = fetch(target, wholePlaylist = downloadPlaylist && song == null) { progress ->
-            onDownloadProgress(entry.id, progress)
-        }.result
-
-        result.fold(
-            onSuccess = { files ->
-                update(entry.id) {
-                    it.done = true
-                    it.percent = 1f
-                    it.files = files
-                    it.status = if (files.isEmpty()) {
-                        "Finished, but nothing was produced."
-                    } else {
-                        "Saved ${files.size} file${if (files.size == 1) "" else "s"}"
-                    }
-                }
-                // Straight into the library, wherever the download folder is.
-                addToLibrary(files)
-            },
-            onFailure = { error ->
-                update(entry.id) {
-                    it.done = true
-                    it.failed = true
-                    it.status = error.message ?: "Download failed."
-                }
-            }
-        )
-    }
-
-    /**
-     * Sends a search result to the downloader.
-     *
-     * Services that host audio (YouTube, Audius, the Internet Archive) carry a
-     * real page URL. Pure metadata catalogues — iTunes, MusicBrainz, Genius —
-     * do not, so the artist and title are handed to yt-dlp as a search instead,
-     * which is the same fallback a Spotify link takes.
-     */
-    /**
-     * Finds the YouTube video that is the song and returns its link.
-     *
-     * When nothing suitable turns up the entry fails with the reason, rather
-     * than saving an edit or a cover that would look like success.
-     */
-    private suspend fun findYouTubeLink(id: Long, wanted: YouTubeLinkFinder.Wanted): String? =
-        when (val outcome = linkFinder.find(wanted)) {
-            is YouTubeLinkFinder.Outcome.Found -> {
-                val video = outcome.pick.video
-                update(id) { entry ->
-                    entry.display = "YouTube · ${video.title}"
-                    entry.note = listOfNotNull(
-                        entry.note,
-                        buildString {
-                            append("Found: ${video.channel}")
-                            video.durationSeconds?.let { append(" · ${YouTubeFormat.duration(it)}") }
-                            video.viewCount?.let { append(" · ${YouTubeFormat.views(it)}") }
-                            append(" · ${video.watchUrl}")
-                        }
-                    ).joinToString("\n")
-                    entry.status = "Starting…"
-                }
-                video.watchUrl
-            }
-
-            is YouTubeLinkFinder.Outcome.NothingSuitable -> {
-                update(id) { entry ->
-                    entry.done = true
-                    entry.failed = true
-                    entry.status = outcome.message
-                }
-                null
-            }
-        }
-
-    fun downloadMatch(match: MusicMatch) {
-        if (match.drmProtected) {
-            toolNote = "${match.provider} streams DRM-protected audio - there is no file " +
-                "to download. Search by name to find it somewhere that hosts it."
-            return
-        }
-        if (!tools.ready) {
-            toolNote = "Install yt-dlp first — one click, about 12 MB."
-            return
-        }
-        val direct = match.downloadUrl?.takeIf { it.startsWith("http", ignoreCase = true) }
-        if (direct != null) {
-            startDownload(direct)
-            return
-        }
-
-        val entry = DownloadEntry(
-            id = System.nanoTime(),
-            target = match.display,
-            display = match.display,
-            note = "${match.provider} has no downloadable file, so the same track is " +
-                "found on YouTube first and that link is downloaded."
-        )
-        synchronized(queueLock) { downloads = downloads + entry }
-        scope.launch {
-            update(entry.id) { it.status = "Finding it on YouTube…" }
-            // The match's own title, artist and length, so the finder can refuse
-            // an edit that happens to share the name.
-            val link = findYouTubeLink(
-                entry.id,
-                YouTubeLinkFinder.Wanted(
-                    title = match.title,
-                    artist = match.artist,
-                    durationMs = match.durationMs
-                )
-            ) ?: return@launch
-            val result = YtDlp.download(
-                target = link,
-                destination = File(settings.downloadDir),
-                format = downloadFormat?.takeIf { tools.ffmpeg },
-                embedThumbnail = downloadEmbedArt,
-                wholePlaylist = false,
-                quality = downloadQuality,
-                onProgress = { progress -> onDownloadProgress(entry.id, progress) }
-            )
-            result.fold(
-                onSuccess = { files ->
-                    update(entry.id) {
-                        it.done = true
-                        it.percent = 1f
-                        it.files = files
-                        it.status = "Saved ${files.size} file${if (files.size == 1) "" else "s"}"
-                    }
-                    addToLibrary(files)
-                },
-                onFailure = { error ->
-                    update(entry.id) {
-                        it.done = true
-                        it.failed = true
-                        it.status = error.message ?: "Download failed."
-                    }
-                }
-            )
-        }
-    }
-
-    private fun isSpotify(url: String): Boolean =
-        runCatching { java.net.URI(url).host.orEmpty().lowercase() }
-            .getOrDefault("")
-            .contains("spotify.com")
-
-    /**
-     * Hands a Spotify link to spotdl.
-     *
-     * spotdl reads Spotify's metadata and fetches the matching recording from
-     * YouTube; Spotify's own audio is encrypted and no tool can download it. So
-     * what arrives is a match rather than the Spotify file — usually the same
-     * recording, occasionally a live take or a remaster. The note says so on the
-     * row rather than leaving it to be discovered on listening.
-     */
-    private suspend fun downloadWithSpotdl(id: Long, url: String) {
-        update(id) {
-            it.status = "Reading Spotify…"
-            it.note = "Spotify's audio is DRM protected, so spotdl looks the track up " +
-                "and fetches the same recording from YouTube. Check it is the version " +
-                "you wanted."
-        }
-        val result = YtDlp.downloadSpotify(
-            url = url,
-            destination = File(settings.downloadDir),
-            format = downloadFormat,
-            quality = downloadQuality,
-            onProgress = { progress -> onDownloadProgress(id, progress) }
-        )
-        result.fold(
-            onSuccess = { files ->
-                update(id) {
-                    it.done = true
-                    it.percent = 1f
-                    it.files = files
-                    it.status = if (files.isEmpty()) {
-                        "Finished, but nothing was produced."
-                    } else {
-                        "Saved ${files.size} file${if (files.size == 1) "" else "s"}"
-                    }
-                }
-                rescan()
-            },
-            onFailure = { error ->
-                update(id) {
-                    it.done = true
-                    it.failed = true
-                    it.status = error.message ?: "Download failed."
-                }
-            }
-        )
-    }
-
-    private fun onDownloadProgress(id: Long, progress: DownloadProgress) {
-        if (progress.line.isNotBlank()) {
-            downloadLog = (downloadLog + progress.line).takeLast(200)
-        }
-        update(id) {
-            progress.percent?.let { percent -> it.percent = percent }
-            if (progress.line.startsWith("[ExtractAudio]")) it.status = "Converting…"
-            else if (progress.percent != null) it.status = "Downloading"
-        }
-    }
-
-    /**
-     * Guards the queue. Downloads report from their own threads, several at
-     * once, and each report reads the list and writes it back: without this,
-     * two landing together lose one, and a song could finish without the row
-     * ever saying so.
-     */
-    private val queueLock = Any()
-
-    private fun update(id: Long, change: (DownloadEntry) -> Unit) = synchronized(queueLock) {
-        downloads = downloads.map { entry ->
-            if (entry.id != id) entry else entry.copy().also(change)
-        }
-    }
-
-    /**
-     * Tries one item of the queue again, in place: a song or a link that
-     * failed, or the songs a playlist missed (those it saved are skipped, so
-     * only the missed ones are fetched).
-     */
-    fun retryDownload(id: Long) {
-        val entry = synchronized(queueLock) { downloads.firstOrNull { it.id == id } } ?: return
-        if (!entry.done || !(entry.failed || entry.missed > 0)) return
-        if (!tools.ready) {
-            toolNote = "Install yt-dlp first — one click, about 12 MB."
-            return
-        }
-        update(id) {
-            it.done = false
-            it.failed = false
-            it.percent = 0f
-            it.status = "Waiting…"
-            it.note = null
-            it.missed = 0
-        }
-        scope.launch {
-            val fresh = synchronized(queueLock) { downloads.firstOrNull { it.id == id } } ?: return@launch
-            val song = entry.song
-            if (song != null) {
-                songSlots.withPermit { runDownload(fresh, entry.target, song) }
-            } else {
-                runDownload(fresh, entry.target, null)
-            }
-        }
-    }
-
-    fun clearFinishedDownloads() = synchronized(queueLock) {
-        downloads = downloads.filterNot { it.done }
-    }
-
-    fun chooseDownloadDir(dir: File) {
-        settings.downloadDir = dir.absolutePath
-    }
-
-    val downloadDir: String get() = settings.downloadDir
+    fun acknowledgeDownloads() = downloader.acknowledgeDownloads()
+    fun refreshTools() = downloader.refreshTools()
+    fun updateYtDlp() = downloader.updateYtDlp()
+    fun startDownload(rawUrl: String = downloadUrl) = downloader.startDownload(rawUrl)
+    fun downloadSong(artist: String, title: String, durationMs: Long?): Long? =
+        downloader.downloadSong(artist, title, durationMs)
+    fun downloadMatch(match: MusicMatch) = downloader.downloadMatch(match)
+    fun retryDownload(id: Long) = downloader.retryDownload(id)
+    fun clearFinishedDownloads() = downloader.clearFinishedDownloads()
+    fun chooseDownloadDir(dir: File) = downloader.chooseDownloadDir(dir)
 
     // ---- Selecting several tracks -------------------------------------------
     //
@@ -4818,7 +4059,7 @@ class DesktopController(parent: CoroutineScope) {
             archiveNote = null
             selectionNote = buildString {
                 if (removed.isNotEmpty()) {
-                    append("Moved ${removed.size} file${if (removed.size == 1) "" else "s"} to the Recycle Bin.")
+                    append("Moved ${removed.size} file${if (removed.size == 1) "" else "s"} to the ${Platform.trashName}.")
                 }
                 if (failed.isNotEmpty()) {
                     if (isNotEmpty()) append(" ")
@@ -4838,21 +4079,19 @@ class DesktopController(parent: CoroutineScope) {
     fun dismissSelectionNote() { selectionNote = null }
 
     // ---- Zip and ship -------------------------------------------------------
+    //
+    // The zipping, and how it is going, are kept in Archiver; what goes into a
+    // zip is picked here.
 
-    /** Progress and outcome of the current archive job. */
-    var archiveRunning by mutableStateOf(false)
-        private set
-    var archiveProgress by mutableStateOf(0f)
-        private set
-    var archiveCurrent by mutableStateOf("")
-        private set
-    var archiveNote by mutableStateOf<String?>(null)
-        private set
-    var archiveFile by mutableStateOf<File?>(null)
-        private set
+    private val archiver = Archiver(scope, settings)
 
-    private var archiveJob: Job? = null
-    @Volatile private var archiveCancelled = false
+    val archiveRunning: Boolean get() = archiver.archiveRunning
+    val archiveProgress: Float get() = archiver.archiveProgress
+    val archiveCurrent: String get() = archiver.archiveCurrent
+    var archiveNote: String?
+        get() = archiver.archiveNote
+        private set(value) { archiver.archiveNote = value }
+    val archiveFile: File? get() = archiver.archiveFile
 
     /** Zips the whole library. */
     fun zipLibrary() = startArchive("Library", tracks)
@@ -4866,216 +4105,30 @@ class DesktopController(parent: CoroutineScope) {
         }
     }
 
-    /**
-     * Packs [chosen] into a zip beside the downloads folder.
-     *
-     * Entry names carry the artist so an archive is navigable once unpacked —
-     * a folder of two hundred files called "01.mp3" is not. Numbering keeps a
-     * playlist's order, which the filesystem would otherwise sort away.
-     */
-    internal fun startArchive(label: String, chosen: List<DesktopTrack>) {
-        if (archiveRunning) return
-        if (chosen.isEmpty()) {
-            archiveNote = "Nothing to archive."
-            return
-        }
-
-        archiveCancelled = false
-        archiveRunning = true
-        archiveProgress = 0f
-        archiveNote = null
-        archiveFile = null
-
-        archiveJob = scope.launch {
-            val stamp = java.time.LocalDate.now().toString()
-            val destination = File(
-                File(settings.downloadDir, "archives"),
-                MusicArchive.safeName("Lucense $label $stamp") + ".zip"
-            )
-            val digits = chosen.size.toString().length
-            val entries = chosen.mapIndexed { index, track ->
-                val number = (index + 1).toString().padStart(digits, '0')
-                val artist = track.artist?.takeIf { it.isNotBlank() }
-                val stem = listOfNotNull(artist, track.title).joinToString(" - ")
-                ArchiveEntry(
-                    source = track.file,
-                    entryName = "$number ${MusicArchive.safeName(stem)}.${track.file.extension}"
-                )
-            }
-
-            val result = io {
-                MusicArchive.zip(
-                    entries = entries,
-                    destination = destination,
-                    onProgress = { progress ->
-                        archiveProgress = progress.fraction
-                        archiveCurrent = progress.currentName
-                    },
-                    shouldContinue = { !archiveCancelled }
-                )
-            }
-
-            archiveRunning = false
-            archiveCurrent = ""
-            result.fold(
-                onSuccess = { done ->
-                    archiveFile = done.file
-                    archiveNote = buildString {
-                        append("${done.included} tracks, ")
-                        append("%.1f MB".format(done.bytes / 1_048_576.0))
-                        if (done.skipped.isNotEmpty()) {
-                            append(" — ${done.skipped.size} missing from storage")
-                        }
-                    }
-                },
-                onFailure = { archiveNote = it.message ?: "Couldn't build the archive." }
-            )
-            archiveJob = null
-        }
-    }
-
-    fun cancelArchive() {
-        archiveCancelled = true
-        archiveJob?.cancel()
-        archiveJob = null
-        archiveRunning = false
-        archiveNote = "Cancelled."
-    }
-
-    /** Opens the folder the archive landed in, and selects it. */
-    fun revealArchive() {
-        val file = archiveFile ?: return
-        Explorer.reveal(file)
-    }
-
-    fun dismissArchive() {
-        archiveNote = null
-        archiveFile = null
-    }
+    internal fun startArchive(label: String, chosen: List<DesktopTrack>) = archiver.startArchive(label, chosen)
+    fun cancelArchive() = archiver.cancelArchive()
+    fun revealArchive() = archiver.revealArchive()
+    fun dismissArchive() = archiver.dismissArchive()
 
     // ---- Duplicates ---------------------------------------------------------
+    //
+    // Kept in DuplicateFinder; these hand the UI's calls through to it.
 
-    var duplicates by mutableStateOf<List<DesktopDuplicateGroup>>(emptyList())
-        private set
-    var duplicatesScanning by mutableStateOf(false)
-        private set
-    var duplicatesNote by mutableStateOf<String?>(null)
-        private set
+    private val duplicateFinder = DuplicateFinder(
+        scope = scope,
+        store = store,
+        tracks = { tracks },
+        playCounts = { playCounts },
+        rescan = { rescan() }
+    )
 
-    /** Songs listened to so far in a duplicates scan, and how many need it; null when not listening. */
-    var duplicatesListening by mutableStateOf<Pair<Int, Int>?>(null)
-        private set
+    val duplicates: List<DesktopDuplicateGroup> get() = duplicateFinder.duplicates
+    val duplicatesScanning: Boolean get() = duplicateFinder.duplicatesScanning
+    val duplicatesNote: String? get() = duplicateFinder.duplicatesNote
+    val duplicatesListening: Pair<Int, Int>? get() = duplicateFinder.duplicatesListening
 
-    /**
-     * Finds the same recording stored more than once, by how it sounds.
-     *
-     * Each song's print is taken once and kept, so only files that are new or
-     * have changed are listened to; a second scan of an unchanged library is
-     * nearly instant. Names play no part: "Track 03.mp3" and a correctly
-     * tagged copy of the same song are found, and two different songs that
-     * happen to share a title are not.
-     */
-    fun findDuplicates(within: List<DesktopTrack>? = null) {
-        if (duplicatesScanning) return
-        duplicatesScanning = true
-        duplicatesNote = null
-        scope.launch {
-            val songs = within ?: tracks
-            val stored = io { store.prints() }
-            val prints = HashMap<String, IntArray>()
-            val todo = mutableListOf<DesktopTrack>()
-            songs.forEach { track ->
-                val path = track.file.absolutePath
-                val saved = stored[path]
-                val decoded = saved?.takeIf {
-                    it.size == track.file.length() && it.modified == track.file.lastModified()
-                }?.let { AudioPrint.decode(it.print) }
-                if (decoded != null) prints[path] = decoded else todo += track
-            }
-
-            if (todo.isNotEmpty()) {
-                duplicatesListening = 0 to todo.size
-                var done = 0
-                val work = Channel<DesktopTrack>(Channel.UNLIMITED)
-                todo.forEach { work.trySend(it) }
-                work.close()
-                coroutineScope {
-                    repeat(PRINTS_AT_ONCE) {
-                        launch {
-                            for (track in work) {
-                                val print = io { PrintReader.read(track.file, track.durationMs) }
-                                if (print != null) {
-                                    val path = track.file.absolutePath
-                                    prints[path] = print
-                                    io {
-                                        store.savePrint(path, track.file.length(), track.file.lastModified(), AudioPrint.encode(print))
-                                    }
-                                }
-                                done++
-                                duplicatesListening = done to todo.size
-                            }
-                        }
-                    }
-                }
-                duplicatesListening = null
-            }
-
-            val counts = playCounts
-            val byPath = songs.associateBy { it.file.absolutePath }
-            val found = io {
-                // Reading embedded art opens the file, so a comparator that
-                // called it directly would re-read the same track O(log n) times.
-                val hasArt = HashMap<String, Boolean>()
-                // Biggest file first as a stand-in for bitrate, then one with
-                // art, then the one actually played.
-                val keeperOrder = compareByDescending<DesktopTrack> { it.sizeBytes }
-                    .thenByDescending {
-                        hasArt.getOrPut(it.file.absolutePath) { Covers.hasLocalArt(it) }
-                    }
-                    .thenByDescending { counts[it.file.absolutePath] ?: 0 }
-                    .thenBy { it.file.lastModified() }
-                AudioPrint.groups(
-                    prints.mapNotNull { (path, print) ->
-                        byPath[path]?.let { AudioPrint.Entry(path, print, it.durationMs) }
-                    }
-                ).map { paths ->
-                    val members = paths.mapNotNull { byPath[it] }.sortedWith(keeperOrder)
-                    DesktopDuplicateGroup(members.first(), members.drop(1))
-                }.sortedBy { it.keep.title.lowercase(Locale.ROOT) }
-            }
-            duplicates = found
-            duplicatesScanning = false
-            if (found.isEmpty()) duplicatesNote = "No song is in the library twice."
-        }
-    }
-
-    /**
-     * Sends the chosen copies to the Recycle Bin where the platform allows it.
-     *
-     * Deliberately not [File.delete]: these are the user's own files, sitting in
-     * their own folders, and a wrong match should be recoverable.
-     */
-    fun removeDuplicates(groups: List<DesktopDuplicateGroup>) {
-        scope.launch {
-            val paths = groups.flatMap { it.remove }.map { it.file }
-            val removed = io {
-                paths.count { file ->
-                    runCatching {
-                        val desktop = java.awt.Desktop.getDesktop()
-                        if (desktop.isSupported(java.awt.Desktop.Action.MOVE_TO_TRASH)) {
-                            desktop.moveToTrash(file)
-                        } else {
-                            file.delete()
-                        }
-                    }.getOrDefault(false)
-                }
-            }
-            io { store.forgetPaths(paths.map { it.absolutePath }) }
-            duplicates = emptyList()
-            duplicatesNote = "Removed $removed file${if (removed == 1) "" else "s"}."
-            rescan()
-        }
-    }
+    fun findDuplicates(within: List<DesktopTrack>? = null) = duplicateFinder.findDuplicates(within)
+    fun removeDuplicates(groups: List<DesktopDuplicateGroup>) = duplicateFinder.removeDuplicates(groups)
 
     // ---- Albums and artists -------------------------------------------------
 
@@ -5234,10 +4287,21 @@ class DesktopController(parent: CoroutineScope) {
         discordNote = presence.note
     }
 
+    /** Waiting for typing in the Discord ID box to stop; see [changeDiscordId]. */
+    private var discordIdApply: Job? = null
+
     fun changeDiscordId(id: String) {
         discordId = id.trim()
         settings.discordId = discordId
-        applyDiscord()
+        // Restarting the presence waits for Discord's thread on this one - up to
+        // a second and a half - and does the handshake again. Done for every key
+        // typed, it froze the window as each character went in; it now happens
+        // once, when typing stops.
+        discordIdApply?.cancel()
+        discordIdApply = scope.launch {
+            delay(DISCORD_ID_SETTLE_MS)
+            applyDiscord()
+        }
     }
 
     private fun applyDiscord() {
@@ -5552,7 +4616,7 @@ class DesktopController(parent: CoroutineScope) {
         refreshPlaylists()
         refreshSmartPlaylists()
         refreshTools()
-        updateYtDlpIfStale()
+        downloader.updateYtDlpIfStale()
         refreshWeather()
         loadWallpaper()
     }
@@ -5563,31 +4627,51 @@ class DesktopController(parent: CoroutineScope) {
         rememberPlace()
         mediaKeys.unbind()
         hotkey.unbind()
-        closeListenEvent()
+        songNotifications?.close()
+        // The song playing as the app closes counts as listened to as well.
+        // closeListenEvent writes from a coroutine, which never got to run
+        // before the store below was closed; this writes it first.
+        closeListenEventNow()
         engine.release()
         store.close()
+    }
+
+    /**
+     * [closeListenEvent] for when nothing will run afterwards: quitting. Only a
+     * play whose row is already written can be finished - one that started a
+     * moment ago has no row yet, and nothing worth keeping.
+     */
+    private fun closeListenEventNow() {
+        val open = openPlay ?: return
+        openPlay = null
+        if (!open.rowId.isCompleted) return
+        val id = runCatching { runBlocking { open.rowId.await() } }.getOrNull() ?: return
+        if (id >= 0) runCatching { store.updateListened(id, engine.status.value.positionMs) }
+    }
+
+    private companion object {
+        /** Songs in a row that wouldn't stream before a list stops trying. */
+        const val STREAM_FAILURES_TO_STOP = 3
+
+        /** How long the Discord ID box has to sit still before Discord is told. */
+        const val DISCORD_ID_SETTLE_MS = 700L
+
+        /** Covers kept as files for the Linux desktop's media controls. */
+        const val DESKTOP_COVERS_KEPT = 20
+
+        /** A kept YouTube address that plays nothing is read again only if it is at least this old. */
+        const val READ_AGAIN_AFTER_MS = 30_000L
+
+        /** How many of Your YouTube's songs, and of an opened mix's, are read ahead. */
+        const val FOR_YOU_AHEAD = 10
+        const val MIX_AHEAD = 5
     }
 
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
 }
 
-/** How the Identify box interprets what you typed. */
-enum class IdentifyMode(val label: String, val placeholder: String) {
-    NAME("Name", "Artist and title, or whatever you can remember"),
-    LYRICS("Lyrics", "A line you remember, however roughly"),
-    LINK("Link", "TikTok, Instagram, YouTube, SoundCloud link"),
-    YOUTUBE("YouTube", "Search YouTube — anything, not just music")
-}
-
-/** The four bulk tools, and the mark each one records so reruns can skip. */
 /** How many songs the cover and tag tools look up at once. */
 private const val SONGS_AT_ONCE = 5
-
-/** Files listened to at once for duplicates by sound: decoding is the slow part. */
-private const val PRINTS_AT_ONCE = 6
-
-/** What the progress panel calls a Fix run. */
-const val FIX_LABEL = "Fix"
 
 /**
  * How long one song's tag lookup may take. Every track goes through the tag
@@ -5599,49 +4683,6 @@ private const val TAGS_GIVE_UP_MS = 10_000L
 /** How long the sleep timer spends fading out before it pauses. */
 private const val SLEEP_FADE_MS = 30_000L
 
-/** A song's effects as one line of text, for the database. */
-private fun encodeFx(fx: DesktopFxState): String =
-    listOf(
-        fx.speed,
-        fx.pitchSemitones,
-        if (fx.reverbEnabled) 1f else 0f,
-        fx.reverbMix,
-        fx.reverbDecay,
-        if (fx.eqEnabled) 1f else 0f,
-        fx.drive,
-        fx.lofi,
-        fx.tremolo,
-        fx.rotate,
-        fx.echo
-    ).joinToString(",") + "|" + fx.eqGains.joinToString(",")
-
-/**
- * Null for anything that isn't the numbers and ten bands written above: six
- * before distortion was added, seven since.
- */
-private fun decodeFx(text: String): DesktopFxState? {
-    val halves = text.split('|')
-    if (halves.size != 2) return null
-    val head = halves[0].split(',').mapNotNull { it.toFloatOrNull() }
-    val gains = halves[1].split(',').mapNotNull { it.toFloatOrNull() }
-    // Six numbers before distortion, seven with it, eleven with lo-fi, tremolo, 8D and echo.
-    if (head.size !in 6..11 || gains.size != 10) return null
-    return DesktopFxState(
-        speed = head[0],
-        pitchSemitones = head[1],
-        reverbEnabled = head[2] > 0.5f,
-        reverbMix = head[3],
-        reverbDecay = head[4],
-        eqEnabled = head[5] > 0.5f,
-        eqGains = gains,
-        drive = head.getOrElse(6) { 0f }.coerceIn(0f, 1f),
-        lofi = head.getOrElse(7) { 0f }.coerceIn(0f, 1f),
-        tremolo = head.getOrElse(8) { 0f }.coerceIn(0f, 1f),
-        rotate = head.getOrElse(9) { 0f }.coerceIn(0f, 1f),
-        echo = head.getOrElse(10) { 0f }.coerceIn(0f, 1f)
-    )
-}
-
 /** How far into a song the previous button restarts it rather than going back. */
 private const val RESTART_WINDOW_MS = 4_000L
 
@@ -5650,32 +4691,14 @@ private val PLAYABLE = setOf(
     "mp3", "m4a", "mp4", "m4b", "flac", "wav", "ogg", "oga", "opus", "aac", "wma", "aiff", "aif"
 )
 
-enum class BulkKind(val label: String, val markColumn: String?) {
-    COVERS("Covers", "artCheckedAt"),
-    TAGS("Names & tags", "identifiedAt"),
-    LYRICS("Lyrics", "lyricsCheckedAt"),
-    IDENTIFY("Identify by sound", "fingerprintedAt"),
-
-    /** Marks nothing: it only ever visits files that are still broken. */
-    REPAIR("Mass fix Telegram songs", null),
-
-    /** Marks nothing either: a measured track is skipped by its own reckoning. */
-    LEVELS("Level volumes", null),
-
-    /** Marks nothing: it only ever visits songs that are still missing something. */
-    FOLDERS("Names from folders", null)
-}
-
-/** What happens when a track, or the queue, runs out. */
-enum class RepeatMode(val label: String) {
-    OFF("Repeat off"),
-    ALL("Repeat all"),
-    ONE("Repeat one");
-
-    companion object {
-        fun fromName(name: String?): RepeatMode = entries.firstOrNull { it.name == name } ?: OFF
-    }
-}
+/**
+ * Newest file first, each file asked its date once. Sorted by
+ * `sortedByDescending { it.file.lastModified() }`, the disk was asked twice per
+ * comparison - for 5,000 songs, some 130,000 times per sort, on the UI thread.
+ * Stable, as that was, so songs from the same moment keep their order.
+ */
+private fun List<DesktopTrack>.newestFirst(): List<DesktopTrack> =
+    map { it to it.file.lastModified() }.sortedByDescending { it.second }.map { it.first }
 
 /** What to send a catalogue when looking a track up. */
 private val DesktopTrack.searchQuery: String

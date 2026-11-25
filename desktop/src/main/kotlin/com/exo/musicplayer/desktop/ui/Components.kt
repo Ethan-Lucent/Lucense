@@ -47,7 +47,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusEventModifierNode
+import androidx.compose.ui.focus.FocusState
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -71,6 +77,11 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.sign
 import kotlinx.coroutines.delay
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.FocusRequesterModifierNode
+import androidx.compose.ui.focus.requestFocus
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.animation.animateColorAsState
 
 /**
  * The small pieces every screen shares.
@@ -95,11 +106,15 @@ fun AccentButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val background = when {
-        !enabled -> Palette.Hover
-        hovered -> Palette.Accent
-        else -> Palette.Button
-    }
+    val background by animateColorAsState(
+        when {
+            !enabled -> Palette.Hover
+            hovered -> Palette.Accent
+            else -> Palette.Button
+        },
+        Motion.quick(),
+        label = "button"
+    )
     val shape = if (Glass.on) RoundedCornerShape(50) else RoundedCornerShape(7.dp)
     Row(
         Modifier
@@ -121,11 +136,15 @@ fun AccentButton(
             .padding(horizontal = 16.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val tint = when {
-            !enabled -> Palette.TextFaint
-            hovered -> Palette.OnAccent
-            else -> Palette.OnButton
-        }
+        val tint by animateColorAsState(
+            when {
+                !enabled -> Palette.TextFaint
+                hovered -> Palette.OnAccent
+                else -> Palette.OnButton
+            },
+            Motion.quick(),
+            label = "button text"
+        )
         if (icon != null) {
             Icon(icon, null, Modifier.size(15.dp), tint = tint)
             Spacer(Modifier.width(8.dp))
@@ -195,7 +214,7 @@ fun IconGhostButton(label: String, icon: ImageVector, enabled: Boolean = true, o
                     } else {
                         Modifier
                             .clip(RoundedCornerShape(7.dp))
-                            .background(if (hovered && enabled) Palette.Hover else Color.Transparent)
+                            .background(hoverFill(hovered && enabled))
                             .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
                     }
                 )
@@ -226,7 +245,7 @@ fun GhostButton(
                 } else {
                     Modifier
                         .clip(RoundedCornerShape(7.dp))
-                        .background(if (hovered && enabled) Palette.Hover else Color.Transparent)
+                        .background(hoverFill(hovered && enabled))
                         .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
                 }
             )
@@ -297,20 +316,124 @@ fun Hint(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** Single-line input styled for a dense layout. */
 /**
- * Whether a text box currently holds the keyboard.
+ * Whether a text box holds the keyboard, in the window that has it.
  *
  * The window claims a few keys before anything else sees them, which is right
  * for Ctrl+A over the song list and wrong the moment someone is typing in a
  * box: there, Ctrl+A means the text in it. The window stands back while this
  * is set, which also hands back Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+Z, Home, End and
- * shift-selection, all of which the text field has always known how to do.
+ * shift-selection, all of which the text field has always known how to do -
+ * and the space bar, the arrows and the one-letter shortcuts, which a text box
+ * types rather than claims, so they used to reach the window too: a space in a
+ * search box paused the music, and an "m" muted it.
+ *
+ * Every text box takes part through [typingField]. Boxes are counted rather
+ * than sharing one flag, so focus going straight from one box to another, or a
+ * focused box leaving the screen, can't leave it stuck either way; and a box
+ * only counts while its own window is the one in front.
+ *
+ * UI thread only.
  */
 object Typing {
-    var active by mutableStateOf(false)
+    private val holders = LinkedHashSet<TypingNode>()
+
+    val active: Boolean get() = holders.any { it.inFocusedWindow }
+
+    internal fun hold(node: TypingNode) {
+        holders += node
+    }
+
+    internal fun release(node: TypingNode) {
+        holders -= node
+    }
 }
 
+/** Counts this text field as [Typing] while it has the focus. */
+fun Modifier.typingField(): Modifier = this then TypingElement
+
+private object TypingElement : ModifierNodeElement<TypingNode>() {
+    override fun create() = TypingNode()
+    override fun update(node: TypingNode) = Unit
+    override fun hashCode(): Int = "typingField".hashCode()
+    override fun equals(other: Any?): Boolean = other === this
+}
+
+internal class TypingNode : Modifier.Node(), FocusEventModifierNode, CompositionLocalConsumerModifierNode {
+    private var window: WindowInfo? = null
+
+    /** Whether this box's window is the one the keyboard goes to. */
+    val inFocusedWindow: Boolean get() = window?.isWindowFocused ?: true
+
+    override fun onAttach() {
+        window = currentValueOf(LocalWindowInfo)
+    }
+
+    override fun onFocusEvent(focusState: FocusState) {
+        if (focusState.isFocused) Typing.hold(this) else Typing.release(this)
+    }
+
+    override fun onDetach() {
+        Typing.release(this)
+        window = null
+    }
+}
+
+/**
+ * The search box on the page in front, for Ctrl+F.
+ *
+ * A box marked [searchBox] joins while it is on screen. Only the page in front
+ * is composed at all, so on any page there is one - the Library's, an album
+ * page's, Identify's - and the newest one in the focused window is the one
+ * asked for. UI thread only.
+ */
+object SearchBoxes {
+    private val boxes = ArrayList<SearchBoxNode>()
+
+    internal fun add(node: SearchBoxNode) {
+        boxes += node
+    }
+
+    internal fun remove(node: SearchBoxNode) {
+        boxes -= node
+    }
+
+    /** Puts the keyboard in the page's search box; false when the page has none. */
+    fun focus(): Boolean = boxes.lastOrNull { it.inFocusedWindow }?.requestFocus() ?: false
+}
+
+/** Makes this text field the one Ctrl+F goes to while it is on screen. */
+fun Modifier.searchBox(): Modifier = this then SearchBoxElement
+
+private object SearchBoxElement : ModifierNodeElement<SearchBoxNode>() {
+    override fun create() = SearchBoxNode()
+    override fun update(node: SearchBoxNode) = Unit
+    override fun hashCode(): Int = "searchBox".hashCode()
+    override fun equals(other: Any?): Boolean = other === this
+}
+
+internal class SearchBoxNode : Modifier.Node(), FocusRequesterModifierNode, CompositionLocalConsumerModifierNode {
+    private var window: WindowInfo? = null
+
+    val inFocusedWindow: Boolean get() = window?.isWindowFocused ?: true
+
+    override fun onAttach() {
+        window = currentValueOf(LocalWindowInfo)
+        SearchBoxes.add(this)
+    }
+
+    override fun onDetach() {
+        SearchBoxes.remove(this)
+        window = null
+    }
+}
+
+/**
+ * Single-line input styled for a dense layout.
+ *
+ * Escape leaves it - the keyboard goes back to the window, so the space bar
+ * plays and pauses again - and [search] makes it the box Ctrl+F jumps to.
+ */
 @Composable
 fun TextInput(
     value: String,
@@ -319,8 +442,10 @@ fun TextInput(
     modifier: Modifier = Modifier,
     leading: ImageVector? = null,
     singleLine: Boolean = true,
+    search: Boolean = false,
     onSubmit: (() -> Unit)? = null
 ) {
+    val focus = LocalFocusManager.current
     Row(
         modifier
             .heightIn(min = CONTROL_HEIGHT)
@@ -357,7 +482,9 @@ fun TextInput(
                 cursorBrush = SolidColor(Palette.Accent),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .onFocusChanged { Typing.active = it.isFocused }
+                    .then(if (search) Modifier.searchBox() else Modifier)
+                    .typingField()
+                    .leaveOnEscape(focus)
                     .then(
                         if (onSubmit == null) {
                             Modifier
@@ -367,6 +494,16 @@ fun TextInput(
                     )
             )
         }
+    }
+}
+
+/** Escape leaves the box, rather than doing whatever Escape does elsewhere while still in it. */
+fun Modifier.leaveOnEscape(focus: FocusManager): Modifier = onPreviewKeyEvent { event ->
+    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+        focus.clearFocus()
+        true
+    } else {
+        false
     }
 }
 
@@ -693,3 +830,8 @@ private val SLIDER_TRACK = 4.dp
 private val SLIDER_REST_RADIUS = 4.5.dp
 private const val SLIDER_CATCH_UP = 0.025f
 private const val SLIDER_HOLD_MS = 900L
+
+/** A hover's fill, easing in and out rather than snapping. */
+@Composable
+private fun hoverFill(on: Boolean): Color =
+    animateColorAsState(if (on) Palette.Hover else Color.Transparent, Motion.quick(), label = "hover").value

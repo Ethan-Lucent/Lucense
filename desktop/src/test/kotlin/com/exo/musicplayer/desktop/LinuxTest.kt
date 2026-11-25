@@ -25,6 +25,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import com.exo.musicplayer.desktop.system.SongNotifications
+import org.freedesktop.dbus.types.UInt32
+import org.freedesktop.dbus.types.Variant
 
 /**
  * The Linux build's own pieces, against the real thing where there is one:
@@ -61,6 +64,40 @@ class LinuxTest {
     }
 
     @Test
+    fun `a song starting shows as a desktop notification`() {
+        linux()
+        assumeTrue(System.getenv("DBUS_SESSION_BUS_ADDRESS") != null, "needs a session bus")
+        val received = Collections.synchronizedList(mutableListOf<String>())
+        val server = Mpris.sessionBus()
+        try {
+            assumeTrue(runCatching { server.requestBusName(SongNotifications.SERVICE) }.isSuccess, "a notification service already runs on this bus")
+            server.exportObject(SongNotifications.PATH, object : SongNotifications.Notifications {
+                override fun Notify(
+                    appName: String, replacesId: UInt32, appIcon: String, summary: String, body: String,
+                    actions: List<String>, hints: Map<String, Variant<*>>, expireTimeout: Int
+                ): UInt32 {
+                    received += "$summary|$body|${replacesId.toLong()}|${hints["image-path"]?.value}"
+                    return UInt32(41)
+                }
+                override fun getObjectPath() = SongNotifications.PATH
+            })
+            val notifications = SongNotifications()
+            notifications.show("Faded", "Alan Walker", "file:///tmp/cover.png")
+            eventually("the first arrives") { received.size >= 1 }
+            notifications.show("Alone", "Alan Walker", null)
+            eventually("the second arrives") { received.size >= 2 }
+            // The second replaces the first rather than piling up under it.
+            assertEquals("Faded|Alan Walker|0|file:///tmp/cover.png", received[0])
+            // No cover: Lucense's own icon, as a file:/// address GNOME reads as a file.
+            assertTrue(received[1].startsWith("Alone|Alan Walker|41|file:///") && received[1].endsWith(".png"), received[1])
+            notifications.close()
+        } finally {
+            runCatching { server.releaseBusName(SongNotifications.SERVICE) }
+            server.close()
+        }
+    }
+
+    @Test
     fun `the desktop sees Lucense through MPRIS`() {
         linux()
         assumeTrue(System.getenv("DBUS_SESSION_BUS_ADDRESS") != null, "needs a session bus")
@@ -76,6 +113,8 @@ class LinuxTest {
             override fun stop() { calls += "stop" }
             override fun seekTo(ms: Long) { calls += "seekTo $ms"; position = ms }
             override fun positionMs(): Long = position
+            override fun setShuffle(on: Boolean) { calls += "shuffle $on" }
+            override fun setLoop(status: String) { calls += "loop $status" }
         })
         val started = mpris.start()
         mpris.problem?.printStackTrace()
@@ -104,6 +143,20 @@ class LinuxTest {
             run("playerctl", "-p", "lucense", "position", "30")
             eventually("the four calls arrive") { calls.size >= 4 }
             assertEquals(listOf("playPause", "next", "previous", "seekTo 30000"), calls.toList())
+
+            // Shuffle and repeat, both ways: the desktop's switches reach Lucense, and Lucense's show.
+            calls.clear()
+            run("playerctl", "-p", "lucense", "shuffle", "On")
+            run("playerctl", "-p", "lucense", "loop", "Track")
+            eventually("shuffle and repeat arrive") { calls.size >= 2 }
+            assertEquals(listOf("shuffle true", "loop Track"), calls.toList())
+            mpris.update(
+                Mpris.NowPlaying(key = "/music/Alan Walker - Faded.mp3", title = "Faded", playing = true, lengthMs = 212_000,
+                    shuffle = true, loop = Mpris.LOOP_PLAYLIST),
+                position
+            )
+            eventually("shuffle shows") { run("playerctl", "-p", "lucense", "shuffle") == "On" }
+            eventually("repeat shows") { run("playerctl", "-p", "lucense", "loop") == "Playlist" }
 
             mpris.update(Mpris.NowPlaying(key = "/music/Alan Walker - Faded.mp3", title = "Faded", playing = false, lengthMs = 212_000), position)
             eventually("paused shows") { run("playerctl", "-p", "lucense", "status") == "Paused" }

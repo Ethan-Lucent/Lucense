@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import com.exo.musicplayer.desktop.system.Platform
 
 /**
  * Downloads as the user's own YouTube account, when they choose to.
@@ -265,7 +266,7 @@ object YouTubeSignIn {
                     else -> "$browser isn't signed in to YouTube. Sign in at youtube.com in $browser, then check again."
                 }
             said.contains("could not find", true) && said.contains("cookies", true) ->
-                "$browser doesn't seem to be installed for this Windows user."
+                "$browser doesn't seem to be installed " + if (Platform.isWindows) "for this Windows user." else "on this computer."
             said.contains("DPAPI", true) || said.contains("decrypt", true) ->
                 "$browser keeps its cookies encrypted so other programs can't read them. Use Sign in here, Firefox, or a cookies.txt file."
             said.contains("Could not copy", true) || said.contains("database is locked", true) || said.contains("Permission denied", true) ->

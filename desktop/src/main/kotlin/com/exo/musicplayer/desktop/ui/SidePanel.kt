@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.exo.musicplayer.desktop.ui
 
 import com.exo.musicplayer.data.audio.CharacterEffect
@@ -72,6 +74,8 @@ import com.exo.musicplayer.util.asDuration
 import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.layout.FlowRow
 
 /** Which side panel is showing, if any. */
 enum class SidePanelKind { EFFECTS, OUTPUT, LYRICS, QUEUE }
@@ -113,8 +117,9 @@ data class DesktopFxState(
      * Maps a shared preset onto this platform's reverb model.
      *
      * The shared definition gives room size abstractly, 0..1; here that becomes
-     * the Schroeder decay coefficient, whose useful range stops at 0.94 because
-     * beyond that the comb filters ring rather than decay.
+     * the Room size slider's 0.40..0.94, which the reverb maps onto its own
+     * feedback (Reverb.feedbackFor). Kept as it was, so saved settings and the
+     * presets still mean the same size of room.
      */
     fun applying(preset: EffectPreset) = copy(
         speed = preset.speed,
@@ -150,9 +155,9 @@ fun SidePanel(
     narrow: Boolean = false,
     controller: DesktopController,
     track: DesktopTrack?,
-    positionMs: Long,
     onClose: () -> Unit
 ) {
+    val nowPlaying by controller.engine.collectNowPlaying()
     Box(
         Modifier
             .width(
@@ -233,7 +238,7 @@ fun SidePanel(
                 EffectsControls(
                     fx = controller.fx,
                     spectrum = controller.engine.spectrum,
-                    playing = controller.engine.status.value.playing,
+                    playing = nowPlaying.playing,
                     onFx = { controller.fx = it }
                 )
                 Spacer(Modifier.height(18.dp))
@@ -260,7 +265,7 @@ fun SidePanel(
                 controller.selectedOutputs,
                 controller::toggleOutput
             )
-            SidePanelKind.LYRICS -> LyricsPanel(controller, track, positionMs)
+            SidePanelKind.LYRICS -> LyricsAtPosition(controller, track)
         }
         }
     }
@@ -288,11 +293,11 @@ private fun EffectsControls(
     // to fit would make them unreadable rather than compact.
     val presets = EffectPreset.entries
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        presets.chunked(3).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                row.forEach { preset ->
-                    Preset(preset.label, fx.matches(preset)) { onFx(fx.applying(preset)) }
-                }
+        // As many to a line as fit, each label on one line: three to a row put
+        // "Slowed + reverb" on two lines in a narrow panel.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            presets.forEach { preset ->
+                Preset(preset.label, fx.matches(preset)) { onFx(fx.applying(preset)) }
             }
         }
     }
@@ -400,12 +405,13 @@ private fun EffectsControls(
         Readout(
             "Room size",
             "${(fx.reverbDecay * 100).roundToInt()}%",
-            if (fx.reverbDecay > 0.9f) "close to ringing" else "how long it takes to die away"
+            if (fx.reverbDecay > 0.9f) "an enormous space" else "how long it takes to die away"
         )
         Slider(
             value = fx.reverbDecay,
             onValueChange = { onFx(fx.copy(reverbDecay = it)) },
-            // Above ~0.95 the comb filters stop decaying and ring indefinitely.
+            // The range the presets' room sizes are mapped onto; the reverb turns it
+            // into a tail of under a second at the bottom to about six at the top.
             valueRange = 0.4f..0.94f,
             colors = sliderColours()
         )
@@ -568,6 +574,13 @@ private fun TickRow(labels: List<String>) {
     }
 }
 
+/** The lyrics, the one part of the panel that follows the position. */
+@Composable
+private fun LyricsAtPosition(controller: DesktopController, track: DesktopTrack?) {
+    val positionMs by controller.engine.collectPositionMs()
+    LyricsPanel(controller, track, positionMs)
+}
+
 /** Sketch of the reverb tail, so "room size" means something before you hear it. */
 @Composable
 private fun DecayCurve(decay: Float, mix: Float) {
@@ -719,6 +732,8 @@ private fun Preset(label: String, selected: Boolean, onClick: () -> Unit) {
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            softWrap = false,
             fontWeight = FontWeight.SemiBold,
             color = if (selected) Palette.Base else Palette.TextDim
         )
@@ -831,8 +846,9 @@ private fun dbAt(y: Float, height: Int): Float {
  */
 @Composable
 private fun QueueList(controller: DesktopController) {
-    val status by controller.engine.status.collectAsState()
-    val coming = controller.upNext
+    val status by controller.engine.collectNowPlaying()
+    // Worked out again when the song or the queue changes, not at every look.
+    val coming by remember(status.track) { derivedStateOf { controller.upNext } }
     when {
         status.track == null -> Hint("Nothing is playing. Start a song and whatever follows it shows up here.")
 
@@ -856,7 +872,7 @@ private fun QueueList(controller: DesktopController) {
             }
             Spacer(Modifier.height(8.dp))
             LazyColumn(Modifier.fillMaxSize()) {
-                itemsIndexed(coming) { index, track ->
+                itemsIndexed(coming, key = { index, track -> "$index:${track.file.absolutePath}" }) { index, track ->
                     Row(
                         Modifier
                             .fillMaxWidth()

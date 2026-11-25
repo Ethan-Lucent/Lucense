@@ -2,6 +2,7 @@ package com.exo.musicplayer.desktop.audio
 
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -21,6 +22,13 @@ import kotlin.math.sqrt
  * of clarity whenever a preset moved pitch, such as Slowed. When reading faster
  * than real time (a step above 1) the cutoff drops to just under the new
  * Nyquist, so nothing folds back into the audible band.
+ *
+ * A new cutoff means a new table, made on the playback thread - at the start of
+ * every 48 kHz track, and at every step of the pitch slider. The window half of
+ * it never changes, so it is worked out once for the whole app ([warmUp], in the
+ * background at startup) and only the sinc is made each time: about a tenth of a
+ * millisecond rather than several, which the output's 60 ms queue on Linux could
+ * not spare.
  */
 class StreamingResampler(private val channels: Int) {
 
@@ -114,19 +122,29 @@ class StreamingResampler(private val channels: Int) {
     /** The windowed sinc at [cutoff] (1 is Nyquist) for every phase, each row summing to 1. */
     private fun design(cutoff: Double) {
         kernelCutoff = cutoff
-        val norm = besselI0(BETA)
+        val window = WINDOW
+        // Along a row x steps by exactly one tap, so sin(PI * cutoff * x) is
+        // carried from tap to tap by rotating it through that one step, rather
+        // than computed afresh 64 times a row.
+        val turn = PI * cutoff
+        val cosTurn = cos(turn)
+        val sinTurn = sin(turn)
         for (row in 0..PHASES) {
             val fraction = row.toDouble() / PHASES
             val start = row * TAPS
+            val firstX = -(HALF - 1) - fraction
+            var s = sin(turn * firstX)
+            var c = cos(turn * firstX)
             var sum = 0.0
             for (k in 0 until TAPS) {
-                val x = k - (HALF - 1) - fraction
-                val along = x / HALF
-                val window = if (abs(along) >= 1.0) 0.0 else besselI0(BETA * sqrt(1.0 - along * along)) / norm
-                val sinc = if (abs(x) < 1e-9) cutoff else sin(PI * cutoff * x) / (PI * x)
-                val value = sinc * window
+                val x = firstX + k
+                val sinc = if (abs(x) < 1e-9) cutoff else s / (PI * x)
+                val value = sinc * window[start + k]
                 kernel[start + k] = value.toFloat()
                 sum += value
+                val next = s * cosTurn + c * sinTurn
+                c = c * cosTurn - s * sinTurn
+                s = next
             }
             if (sum != 0.0) {
                 for (k in 0 until TAPS) kernel[start + k] = (kernel[start + k] / sum).toFloat()
@@ -134,23 +152,41 @@ class StreamingResampler(private val channels: Int) {
         }
     }
 
-    private fun besselI0(x: Double): Double {
-        var sum = 1.0
-        var term = 1.0
-        val half = x / 2.0
-        var k = 1
-        while (term > 1e-12 * sum) {
-            term *= (half / k) * (half / k)
-            sum += term
-            k++
-        }
-        return sum
-    }
+    companion object {
+        private const val HALF = 32
+        private const val TAPS = HALF * 2
+        private const val PHASES = 1024
+        private const val BETA = 7.5
 
-    private companion object {
-        const val HALF = 32
-        const val TAPS = HALF * 2
-        const val PHASES = 1024
-        const val BETA = 7.5
+        /**
+         * The Kaiser window for every phase and tap, the same whatever the cutoff:
+         * worked out once, the first time anything needs it.
+         */
+        private val WINDOW: DoubleArray by lazy {
+            val norm = besselI0(BETA)
+            DoubleArray((PHASES + 1) * TAPS) { index ->
+                val x = index % TAPS - (HALF - 1) - (index / TAPS).toDouble() / PHASES
+                val along = x / HALF
+                if (abs(along) >= 1.0) 0.0 else besselI0(BETA * sqrt(1.0 - along * along)) / norm
+            }
+        }
+
+        /** Works out the shared window now, so no playback thread ever has to. */
+        fun warmUp() {
+            WINDOW.size
+        }
+
+        private fun besselI0(x: Double): Double {
+            var sum = 1.0
+            var term = 1.0
+            val half = x / 2.0
+            var k = 1
+            while (term > 1e-12 * sum) {
+                term *= (half / k) * (half / k)
+                sum += term
+                k++
+            }
+            return sum
+        }
     }
 }

@@ -63,6 +63,7 @@ import java.awt.Dimension
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.sqrt
+import com.exo.musicplayer.desktop.data.EffectTrim
 
 /** Bars across the waveform. */
 private const val BARS = 220
@@ -78,9 +79,10 @@ fun TrimWindow(controller: DesktopController, track: DesktopTrack, onClose: () -
     DialogWindow(
         onCloseRequest = onClose,
         title = "Trim · ${track.title}",
-        state = rememberDialogState(size = DpSize(780.dp, 500.dp))
+        // Room for the effects row and the buttons under it, labels and all.
+        state = rememberDialogState(size = DpSize(800.dp, 640.dp))
     ) {
-        LaunchedEffect(Unit) { window.minimumSize = Dimension(600, 460) }
+        LaunchedEffect(Unit) { window.minimumSize = Dimension(640, 600) }
         LucenseDesktopTheme {
             if (Glass.on) {
                 // The same glass as the main window: a pane over the colour field.
@@ -109,6 +111,8 @@ internal fun Trimmer(controller: DesktopController, track: DesktopTrack, onClose
     val endMs = (endSet ?: lengthMs).coerceAtMost(lengthMs)
 
     var saving by remember { mutableStateOf(false) }
+    // Off unless chosen: a plain trim is lossless, one with the effects is encoded again.
+    var withEffects by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf<File?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -204,9 +208,23 @@ internal fun Trimmer(controller: DesktopController, track: DesktopTrack, onClose
         }
 
         Spacer(Modifier.weight(1f))
+        val effectsOn = !controller.fx.isDefault
+        if (effectsOn) {
+            CheckRow(
+                label = "With the effects on now (${EffectTrim.describe(controller.fx)})",
+                checked = withEffects,
+                note = "Speed, pitch, reverb, EQ and the rest, exactly as you hear them. A reverb rings on past the cut."
+            ) { withEffects = it }
+            Spacer(Modifier.height(8.dp))
+        }
         Hint(
-            "Lossless: the audio is cut, not encoded again, so it sounds exactly as before. A cut lands " +
-                "within a few hundredths of a second. The piece is saved beside the original, which stays as it is."
+            if (effectsOn && withEffects) {
+                "Played through the effects and encoded again, at a high setting, in the original's format where " +
+                    "ffmpeg can write it, with its tags and cover. Saved beside the original, which stays as it is."
+            } else {
+                "Lossless: the audio is cut, not encoded again, so it sounds exactly as before. A cut lands " +
+                    "within a few hundredths of a second. The piece is saved beside the original, which stays as it is."
+            }
         )
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -232,14 +250,16 @@ internal fun Trimmer(controller: DesktopController, track: DesktopTrack, onClose
             Spacer(Modifier.width(8.dp))
             AccentButton(
                 if (saving) "Saving…" else "Save as a new song",
+                // Something to save: a piece of the song, or the effects on it - the whole
+                // song with them is a new song too.
                 enabled = !saving && lengthMs > 0 && endMs - startMs >= Trim.MIN_LENGTH_MS &&
-                    (startMs > 0 || endMs < lengthMs),
+                    (startMs > 0 || endMs < lengthMs || (effectsOn && withEffects)),
                 icon = Icons.Default.ContentCut
             ) {
                 saving = true
                 problem = null
                 scope.launch {
-                    controller.saveTrim(track, startMs, endMs)
+                    controller.saveTrim(track, startMs, endMs, withEffects = effectsOn && withEffects)
                         .onSuccess { saved = it }
                         .onFailure { problem = "Couldn't save it: ${it.message}" }
                     saving = false

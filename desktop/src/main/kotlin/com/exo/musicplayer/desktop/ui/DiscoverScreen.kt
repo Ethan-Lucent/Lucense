@@ -54,6 +54,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -99,12 +101,19 @@ import kotlinx.coroutines.delay
 private class Shared(
     val controller: DesktopController,
     val browser: DiscoverBrowser,
-    val preview: PreviewState,
+    private val previewState: State<PreviewState>,
     val library: LibraryView,
     val samples: Map<String, DiscoverTrack>,
     /** Opens YouTube search in Identify with this text. */
     val youTube: (String) -> Unit
 ) {
+    /**
+     * What is previewing, read where it is shown. It ticks every second while a
+     * preview plays: held as a value, it made a new Shared every second, and
+     * every page on screen recomposed with it.
+     */
+    val preview: PreviewState get() = previewState.value
+
     fun hearSong(track: DiscoverTrack) = controller.hear(
         DiscoverBrowser.previewKey(track),
         PreviewLabel(track.title, track.artist, track.coverUrl)
@@ -149,7 +158,7 @@ fun DiscoverScreen(controller: DesktopController, onOpenSignIn: () -> Unit = {},
     val genres by browser.genres.collectAsState()
     val library by browser.library.collectAsState()
     val samples by browser.samples.collectAsState()
-    val preview by controller.preview.state.collectAsState()
+    val previewState = controller.preview.state.collectAsState()
 
     LaunchedEffect(Unit) { browser.open() }
     // The library a moment after it last changed, rather than once per file of a scan.
@@ -157,9 +166,12 @@ fun DiscoverScreen(controller: DesktopController, onOpenSignIn: () -> Unit = {},
         delay(500)
         browser.setLibrary(controller.tracks.map { LibrarySong(it.title, it.artist, it.genre) })
     }
-    val shared = Shared(controller, browser, preview, library, samples) { text ->
-        controller.searchYouTubeFor(text)
-        onOpenIdentify()
+    val openIdentify by rememberUpdatedState(onOpenIdentify)
+    val shared = remember(controller, browser, previewState, library, samples) {
+        Shared(controller, browser, previewState, library, samples) { text ->
+            controller.searchYouTubeFor(text)
+            openIdentify()
+        }
     }
     val page = stack.last()
     // Each page keeps its own scroll position, so Back returns to where it was left.
@@ -225,6 +237,7 @@ private fun HomePage(genres: List<String>, shared: Shared) {
                         value = search.query,
                         onValueChange = browser::setQuery,
                         placeholder = "A genre or an artist",
+                        search = true,
                         leading = Icons.Default.Search,
                         modifier = Modifier.weight(1f)
                     )

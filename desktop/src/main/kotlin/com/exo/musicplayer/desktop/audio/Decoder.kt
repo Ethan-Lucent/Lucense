@@ -17,7 +17,8 @@ import kotlin.math.ceil
 private const val MAX_IDLE_READS = 64
 
 /** Everything is decoded to this rate before it reaches the effects and the device. */
-private val OUTPUT_RATE: Float get() = AudioDevices.FORMAT.sampleRate
+/** What a decoder hands over unless asked for another rate: the rate fingerprinting and analysis expect. */
+private val DEFAULT_RATE: Int get() = AudioDevices.FORMAT.sampleRate.toInt()
 
 /** An audio file as 44.1 kHz interleaved stereo floats in -1..1. */
 interface Decoder : AutoCloseable {
@@ -56,22 +57,22 @@ interface Decoder : AutoCloseable {
          * Before this, m4a, AAC, ALAC, Opus, WebM, Matroska, WMA, WavPack, AC-3 and
          * TTA files were listed in the library and then could not be played.
          */
-        fun open(file: File, startFrame: Long = 0L): Decoder {
+        fun open(file: File, startFrame: Long = 0L, rate: Int = DEFAULT_RATE): Decoder {
             // By content, so an M4A called .mp3 goes straight to ffmpeg rather
             // than to an MP3 decoder hunting through it for frames.
             if (AudioKind.of(file) in JAVA_SOUND_EXTENSIONS) {
-                val native = runCatching { JavaSoundDecoder(file) }.getOrNull()
+                val native = runCatching { JavaSoundDecoder(file, rate) }.getOrNull()
                 if (native != null) {
                     if (startFrame > 0) native.skip(startFrame)
                     return native
                 }
             }
             val ffmpeg = ToolPaths.ffmpeg
-            if (ffmpeg.isFile) return FfmpegDecoder(ffmpeg, file, startFrame)
+            if (ffmpeg.isFile) return FfmpegDecoder(ffmpeg, file, startFrame, rate)
 
             // No ffmpeg, as when running from a plain classpath: whatever Java Sound
             // manages is better than nothing.
-            val fallback = runCatching { JavaSoundDecoder(file) }.getOrNull()
+            val fallback = runCatching { JavaSoundDecoder(file, rate) }.getOrNull()
                 ?: throw UnsupportedAudioFileException(
                     "Playing .${file.extension} files needs ffmpeg, which is missing from this installation."
                 )
@@ -97,7 +98,10 @@ interface Decoder : AutoCloseable {
  * Buffers are reused between reads. This runs on the playback thread, where a
  * steady stream of garbage is what turns into audible hitches.
  */
-class JavaSoundDecoder(file: File) : Decoder {
+class JavaSoundDecoder(file: File, rate: Int = DEFAULT_RATE) : Decoder {
+
+    /** Frames a second handed over: the source resampled to this. */
+    private val OUTPUT_RATE = rate.toFloat()
 
     private val source: AudioInputStream = AudioSystem.getAudioInputStream(file)
     private val pcm: AudioInputStream
@@ -231,7 +235,11 @@ class FfmpegDecoder(
     private val ffmpeg: File,
     private val file: File,
     startFrame: Long = 0L
-) : Decoder {
+,
+    rate: Int = DEFAULT_RATE) : Decoder {
+
+    /** Frames a second ffmpeg is asked for. */
+    private val OUTPUT_RATE = rate.toFloat()
 
     override val totalFrames: Long = -1L
 
