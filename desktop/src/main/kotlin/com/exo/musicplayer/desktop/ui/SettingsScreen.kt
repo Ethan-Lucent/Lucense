@@ -68,6 +68,7 @@ enum class SettingsTab(val label: String) {
     APPEARANCE("Appearance"),
     DOWNLOADS("Downloads"),
     INTEGRATIONS("Integrations"),
+    KEYS("Keys"),
     ABOUT("About")
 }
 
@@ -123,6 +124,7 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
                         SharingSettings(controller)
                         WeatherSettings(controller)
                     }
+                    SettingsTab.KEYS -> KeysSettings()
                     SettingsTab.ABOUT -> AboutSettings(controller)
                 }
                 Spacer(Modifier.height(14.dp))
@@ -627,6 +629,17 @@ private fun DesktopNotificationSettings(controller: DesktopController) {
             note = "A notification with the song and its cover, for when Lucense is behind other windows. " +
                 "The next song replaces it rather than piling up."
         ) { controller.notifySongs = it }
+    }
+}
+
+@Composable
+private fun KeysSettings() {
+    Panel(Modifier.fillMaxWidth()) {
+        SectionTitle("Keys")
+        Spacer(Modifier.height(4.dp))
+        Hint("Live whenever the window has focus and you aren't typing in a box. / shows the same list from anywhere.")
+        Spacer(Modifier.height(12.dp))
+        KeyGuide()
     }
 }
 

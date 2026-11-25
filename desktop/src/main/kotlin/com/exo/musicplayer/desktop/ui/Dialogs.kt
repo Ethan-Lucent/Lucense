@@ -862,36 +862,9 @@ fun ShortcutsDialog(onDismiss: () -> Unit) {
         subtitle = "Live whenever the window has focus and you are not typing in a box (Esc leaves one)",
         onDismiss = onDismiss
     ) {
-        listOf(
-            "Space" to "Play or pause",
-            "\u2190  \u2192" to "Back or forward five seconds",
-            "Ctrl + \u2190  \u2192" to "Previous or next song",
-            "\u2191  \u2193" to "Volume up or down",
-            "J" to "Jump the list to the song playing",
-            "S" to "Shuffle on or off",
-            "M" to "Mute, or put the volume back",
-            "R" to "Repeat: all, then one, then off",
-            "L" to "Loop: A here, then B here and round, then off",
-            "Ctrl + F" to "Search, from anywhere",
-            "Ctrl + A" to "Select every song in view",
-            "Esc" to "Clear the selection, or back from an album or artist",
-            "Ctrl + click" to "Add one song to the selection",
-            "Shift + click" to "Select everything between",
-            "/" to "This list"
-        ).forEach { (keys, what) ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    keys,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.Accent,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.width(132.dp)
-                )
-                Text(what, style = MaterialTheme.typography.bodySmall, color = Palette.Text)
-            }
+        // Scrolls rather than running off a small window: the guide is long.
+        Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+            KeyGuide()
         }
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth()) {
