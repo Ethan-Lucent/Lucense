@@ -274,6 +274,10 @@ listOf("", "Release").forEach { variant ->
         (this as org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask).apply {
             dependsOn(image)
             appImage.set(image.flatMap { it.destinationDir.dir("Lucense") })
+            // Compose leaves --icon out when packaging an existing app image, and jpackage
+            // then gives the menu entry - and so the dock and Alt+Tab - Java's own Duke
+            // icon. jpackage takes --icon fine alongside --app-image.
+            freeArgs.addAll("--icon", project.layout.projectDirectory.file("icons/lucense.png").asFile.absolutePath)
         }
     }
 }
