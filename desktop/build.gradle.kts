@@ -67,6 +67,8 @@ tasks.test {
     useJUnitPlatform()
     // Linux's data folder, kept inside the build, so tests never touch anyone's own Lucense.
     environment("XDG_DATA_HOME", layout.buildDirectory.dir("test-data").get().asFile.absolutePath)
+    // And its cache folder (the covers kept on disk), likewise.
+    environment("XDG_CACHE_HOME", layout.buildDirectory.dir("test-cache").get().asFile.absolutePath)
     // Dragged songs are linked into ~/Downloads/.lucense-share on Linux; never from a test.
     systemProperty("lucense.share.dir", "off")
     testLogging {
@@ -98,6 +100,9 @@ compose.desktop {
         // The window's X11 class is named after the menu entry (see Main.kt), which
         // means reaching into AWT's X11 toolkit.
         if (buildingOnLinux) jvmArgs("--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED")
+        // So is asking the window manager to move and size it (LinuxFrame), which
+        // has to hold AWT's lock on that toolkit's connection.
+        if (buildingOnLinux) jvmArgs("--add-exports=java.desktop/sun.awt=ALL-UNNAMED")
 
         // Memory behaviour, deliberately without -Xmx.
         //

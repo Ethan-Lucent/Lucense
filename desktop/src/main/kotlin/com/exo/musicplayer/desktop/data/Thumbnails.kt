@@ -4,7 +4,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import kotlin.math.min
 import org.jetbrains.skia.EncodedImageFormat
+import org.jetbrains.skia.FilterMipmap
+import org.jetbrains.skia.FilterMode
 import org.jetbrains.skia.Image
+import org.jetbrains.skia.MipmapMode
 import org.jetbrains.skia.Rect
 import org.jetbrains.skia.Surface
 import java.util.Collections
@@ -38,31 +41,67 @@ object Thumbnails {
     /** Roughly 40 MB of pixels, whatever mix of sizes that turns out to be. */
     private const val BYTE_BUDGET = 40L * 1024 * 1024
 
+    /**
+     * How pictures are scaled down: from mipmaps, linearly. Skia's default,
+     * nearest pixel, takes one pixel in every twelve of a 1000-pixel cover
+     * made 80, and a row's cover came out grainy and shimmering.
+     */
+    private val SMOOTH = FilterMipmap(FilterMode.LINEAR, MipmapMode.LINEAR)
+
     /** Decodes [bytes], scaling down so the longest edge is at most [MAX_EDGE]. */
     fun decodeScaled(bytes: ByteArray, maxEdge: Int = MAX_EDGE): ImageBitmap? = runCatching {
-        val source = Image.makeFromEncoded(bytes)
-        try {
-            val longest = max(source.width, source.height)
-            if (longest <= maxEdge) return@runCatching source.toComposeImageBitmap()
-
-            val scale = maxEdge.toFloat() / longest
-            val width = (source.width * scale).roundToInt().coerceAtLeast(1)
-            val height = (source.height * scale).roundToInt().coerceAtLeast(1)
-
-            val surface = Surface.makeRasterN32Premul(width, height)
-            try {
-                surface.canvas.drawImageRect(
-                    source,
-                    Rect.makeWH(width.toFloat(), height.toFloat())
-                )
-                surface.makeImageSnapshot().toComposeImageBitmap()
-            } finally {
-                surface.close()
+        Image.makeFromEncoded(bytes).use { source ->
+            if (max(source.width, source.height) <= maxEdge) {
+                source.toComposeImageBitmap()
+            } else {
+                scaled(source, maxEdge) { it.toComposeImageBitmap() }
             }
-        } finally {
-            source.close()
         }
     }.getOrNull()
+
+    /**
+     * [bytes] scaled to each of [edges] (the longest edge, never enlarged) and
+     * encoded to keep: JPEG, or PNG where the picture has see-through parts
+     * JPEG would fill in black. Decoded once for all of them; null if [bytes]
+     * isn't a picture.
+     */
+    fun encodeSizes(bytes: ByteArray, vararg edges: Int): List<ByteArray>? = runCatching {
+        Image.makeFromEncoded(bytes).use { source ->
+            val opaque = source.imageInfo.isOpaque
+            edges.map { edge ->
+                scaled(source, edge) { picture ->
+                    val data = if (opaque) {
+                        picture.encodeToData(EncodedImageFormat.JPEG, 90)
+                    } else {
+                        picture.encodeToData(EncodedImageFormat.PNG)
+                    }
+                    checkNotNull(data) { "not encoded" }.use { it.bytes }
+                }
+            }
+        }
+    }.getOrNull()
+
+    /** [source] drawn at most [maxEdge] on its longest edge, handed to [block] while it lasts. */
+    private inline fun <T> scaled(source: Image, maxEdge: Int, block: (Image) -> T): T {
+        val longest = max(source.width, source.height)
+        val scale = if (longest <= maxEdge) 1f else maxEdge.toFloat() / longest
+        val width = (source.width * scale).roundToInt().coerceAtLeast(1)
+        val height = (source.height * scale).roundToInt().coerceAtLeast(1)
+        val surface = Surface.makeRasterN32Premul(width, height)
+        try {
+            surface.canvas.drawImageRect(
+                source,
+                Rect.makeWH(source.width.toFloat(), source.height.toFloat()),
+                Rect.makeWH(width.toFloat(), height.toFloat()),
+                SMOOTH,
+                null,
+                true
+            )
+            return surface.makeImageSnapshot().use(block)
+        } finally {
+            surface.close()
+        }
+    }
 
     /**
      * [bytes] cropped to its centre square and re-encoded as JPEG, when the image
@@ -178,5 +217,6 @@ object Thumbnails {
         operator fun contains(key: String): Boolean = keys.contains(key)
         operator fun plusAssign(key: String) { keys.add(key) }
         operator fun minusAssign(key: String) { keys.remove(key) }
+        fun clear() = keys.clear()
     }
 }

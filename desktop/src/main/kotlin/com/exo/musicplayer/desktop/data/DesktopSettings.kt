@@ -51,6 +51,22 @@ object AppDirs {
     }
 
     val covers: File by lazy { File(root, "covers").also { it.mkdirs() } }
+
+    /**
+     * What is kept only to be quick, and is made again whenever it is missing:
+     * the system's cache folder on Linux (~/.cache/Lucense), which backups skip
+     * and cleaners may empty; a folder in Lucense's own on Windows.
+     */
+    val cache: File by lazy {
+        val base = if (com.exo.musicplayer.desktop.system.Platform.isWindows) {
+            File(root, "cache")
+        } else {
+            val xdg = System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotBlank() }
+                ?: (System.getProperty("user.home") + File.separator + ".cache")
+            File(xdg, "Lucense")
+        }
+        base.also { it.mkdirs() }
+    }
     val tools: File by lazy { File(root, "tools").also { it.mkdirs() } }
     val downloads: File by lazy { File(root, "downloads").also { it.mkdirs() } }
     /**
@@ -163,6 +179,11 @@ class DesktopSettings {
     var glass: Boolean
         get() = prefs.getBoolean(KEY_GLASS, false)
         set(value) = prefs.putBoolean(KEY_GLASS, value)
+
+    /** How see-through the glass panes are, 0 to 1; half is glass's own look. */
+    var glassSeeThrough: Float
+        get() = prefs.getFloat(KEY_GLASS_SEE_THROUGH, com.exo.musicplayer.desktop.ui.Glass.SEE_THROUGH_DEFAULT)
+        set(value) = prefs.putFloat(KEY_GLASS_SEE_THROUGH, value)
 
     /** Whether the accent follows the cover of the song playing. */
     var coverColours: Boolean
@@ -383,6 +404,7 @@ class DesktopSettings {
         const val KEY_DOWNLOAD_PLAYLIST = "download_whole_playlist"
         const val KEY_COVER_COLOURS = "cover_colours"
         const val KEY_GLASS = "glass_ui"
+        const val KEY_GLASS_SEE_THROUGH = "glass_see_through"
         const val KEY_LYRICS_OWN_BACKGROUND = "lyrics_own_background"
         const val KEY_KEEP_IN_TRAY = "keep_in_tray"
         const val KEY_TRAY_MINI_PLAYER = "tray_mini_player"

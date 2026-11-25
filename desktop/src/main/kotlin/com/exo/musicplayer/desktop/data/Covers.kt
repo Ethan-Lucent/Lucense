@@ -7,6 +7,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import com.exo.musicplayer.desktop.library.AudioKind
 import com.exo.musicplayer.desktop.library.DesktopTrack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jaudiotagger.tag.FieldKey
 import org.jaudiotagger.tag.Tag
@@ -15,6 +17,9 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Cover art for the desktop library.
@@ -24,16 +29,53 @@ import java.security.MessageDigest
  * to it — the convention every ripper and downloader already follows, so a
  * folder-based library usually has art before Lucense fetches anything.
  *
- * Decoding happens off the UI thread and results are held in a bounded
- * memory cache. This is the same lesson the Android build learned the hard way:
+ * Taking a cover out of a song is the slow part - a tag read and a full-size
+ * decode, tens of milliseconds - so it is done once: both sizes Lucense draws
+ * are kept on disk ([CoverThumbs]) and come back from there in well under a
+ * millisecond. The row-sized ones are small enough for a whole library's to
+ * fit in memory, and [warm] brings them all in at startup, so a list scrolled
+ * however fast has its covers there already, the way Spotify's has.
+ *
+ * Decoding happens off the UI thread and results are held in bounded memory
+ * caches. This is the same lesson the Android build learned the hard way:
  * touching the filesystem while a list scrolls is what makes a list stutter.
  */
 object Covers {
 
+    /**
+     * Longest edge, in pixels, of the covers the lists draw: at 30-46dp, which
+     * this is sharp for on a screen scaled up to 175 %. Anything drawn larger -
+     * the album grid, a player's own cover - has the [Thumbnails.MAX_EDGE] one.
+     */
+    const val SMALL_EDGE = 80
+
+    /** About 1,900 different row covers: a whole library, for most. */
+    private const val SMALL_BUDGET = 48L * 1024 * 1024
+
+    /** Songs [warm] works on at once: quick, and leaving the rest of the machine alone. */
+    private const val WARMERS = 3
+
+    /** Covers at [Thumbnails.MAX_EDGE], by song. */
     private val memory = Thumbnails.ByteBudgetCache()
 
+    /**
+     * Row covers, held by picture rather than by song - an album's songs share
+     * one cover, and so one bitmap - with [smallOf] saying which is whose.
+     */
+    private val small = Thumbnails.ByteBudgetCache(SMALL_BUDGET)
+    private val smallOf = ConcurrentHashMap<String, String>()
+
     /** Paths already checked and found to have no art, so they aren't re-read. */
-    private val misses = Thumbnails.BoundedKeySet()
+    private val misses = Thumbnails.BoundedKeySet(limit = 50_000)
+
+    /** Both sizes of every cover, on disk. */
+    private val disk: CoverThumbs by lazy { CoverThumbs(File(AppDirs.cache, "covers")) }
+
+    /** The disk is tidied once a run, after the first whole library is warmed. */
+    private val pruned = AtomicBoolean(false)
+
+    /** Covers taken out of songs - the slow way - since the start, for the log. */
+    private val rendered = AtomicInteger()
 
     /**
      * Goes up whenever a cover is fetched, so covers already on screen swap in
@@ -47,40 +89,64 @@ object Covers {
         "front.jpg", "front.png", "album.jpg", "albumart.jpg"
     )
 
-    fun cached(track: DesktopTrack): ImageBitmap? = memory[track.file.absolutePath]
+    /** The cover in memory at the size [edge] (pixels) asks for, or null. */
+    fun cached(track: DesktopTrack, edge: Int = Thumbnails.MAX_EDGE): ImageBitmap? {
+        val path = track.file.absolutePath
+        return if (edge <= SMALL_EDGE) smallOf[path]?.let { small[it] } else memory[path]
+    }
 
     fun knownMissing(track: DesktopTrack): Boolean = track.file.absolutePath in misses
 
     /** The cover's own bytes, as stored: for a picture handed to something else to show. */
-    suspend fun bytes(track: DesktopTrack): ByteArray? = withContext(Dispatchers.IO) {
-        downloadedFile(track).takeIf { it.exists() }?.readBytes()
-            ?: embedded(track.file)
-            ?: sidecar(track.file)
-    }
+    suspend fun bytes(track: DesktopTrack): ByteArray? = withContext(Dispatchers.IO) { sourceOf(track) }
 
-    suspend fun load(track: DesktopTrack): ImageBitmap? = withContext(Dispatchers.IO) {
-        val key = track.file.absolutePath
-        memory[key]?.let { return@withContext it }
-        if (key in misses) return@withContext null
-
-        val bytes = downloadedFile(track).takeIf { it.exists() }?.readBytes()
-            ?: embedded(track.file)
-            ?: sidecar(track.file)
-
-        if (bytes == null) {
-            misses += key
-            return@withContext null
+    /** The cover at the size [edge] (pixels) asks for: from memory, else disk, else out of the song. */
+    suspend fun load(track: DesktopTrack, edge: Int = Thumbnails.MAX_EDGE): ImageBitmap? =
+        withContext(Dispatchers.IO) {
+            if (edge <= SMALL_EDGE) loadSmall(track) else loadLarge(track)
         }
 
-        // Scaled on the way in: the source is often 1000x1000, and the largest
-        // place it is ever drawn is a 144dp grid cell.
-        val bitmap = Thumbnails.decodeScaled(bytes)
-        if (bitmap == null) {
-            misses += key
-        } else {
-            memory[key] = bitmap
+    /**
+     * Brings every song's row cover into memory, a few songs at a time in the
+     * background: from disk, or - the first time a song is seen - out of the
+     * song and onto disk. Stops once memory's share is nearly full; the rest then
+     * come from disk as they are drawn. Started again whenever the library
+     * changes, and what is in memory already is passed over at once.
+     */
+    suspend fun warm(tracks: List<DesktopTrack>) {
+        if (tracks.isEmpty()) return
+        val started = System.nanoTime()
+        val renderedBefore = rendered.get()
+        val next = AtomicInteger()
+        val full = AtomicBoolean(false)
+        withContext(Dispatchers.IO) {
+            repeat(WARMERS) {
+                launch {
+                    while (true) {
+                        ensureActive()
+                        if (small.approximateBytes > SMALL_BUDGET / 10 * 9) {
+                            full.set(true)
+                            break
+                        }
+                        val at = next.getAndIncrement()
+                        if (at >= tracks.size) break
+                        runCatching { loadSmall(tracks[at]) }
+                    }
+                }
+            }
         }
-        bitmap
+        val inMemory = tracks.count { cached(it, SMALL_EDGE) != null }
+        System.err.println(
+            "Lucense: row covers ready for $inMemory of ${tracks.size} songs in " +
+                "${(System.nanoTime() - started) / 1_000_000} ms (${rendered.get() - renderedBefore} taken out of the songs" +
+                (if (full.get()) "; memory's share full, the rest come from disk as they show)" else ")")
+        )
+        // Every song seen: what is kept for songs no longer here, or changed since, can go.
+        if (!full.get() && pruned.compareAndSet(false, true)) {
+            withContext(Dispatchers.IO) {
+                runCatching { disk.prune(tracks.mapNotNullTo(HashSet()) { disk.keyOf(it.file) }) }
+            }
+        }
     }
 
     /** Fetches [url], caches it beside the library and, where possible, embeds it. */
@@ -90,31 +156,138 @@ object Covers {
         embedInFile: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
         val bytes = download(url)?.let(Thumbnails::squared) ?: return@withContext false
-        // Decoded once to prove it is a real image, and that same result is
-        // what goes in the cache rather than decoding a second time.
-        val bitmap = Thumbnails.decodeScaled(bytes) ?: return@withContext false
+        // Encoded once to prove it is a real image, and those encodings are what
+        // is kept, rather than decoding it all over again.
+        val sizes = encode(bytes) ?: return@withContext false
+        val bitmap = Thumbnails.decodeScaled(sizes.large) ?: return@withContext false
 
         downloadedFile(track).writeBytes(bytes)
         if (embedInFile) runCatching { embed(track.file, bytes) }
 
-        val key = track.file.absolutePath
-        misses -= key
-        memory[key] = bitmap
+        val path = track.file.absolutePath
+        // Embedding changed the song, and with it the key its covers are kept under.
+        disk.keyOf(track.file)?.let { key -> runCatching { disk.write(key, sizes) } }
+        misses -= path
+        memory[path] = bitmap
+        keepSmall(path, sizes.small)
         revision++
         true
     }
 
     fun forget(track: DesktopTrack) {
-        val key = track.file.absolutePath
-        memory -= key
-        misses -= key
+        val path = track.file.absolutePath
+        memory -= path
+        smallOf.remove(path)
+        misses -= path
+        disk.keyOf(track.file)?.let(disk::forget)
+    }
+
+    /** Lets go of everything held in memory, as at a fresh start; what is on disk stays. */
+    internal fun clearMemory() {
+        memory.clear()
+        small.clear()
+        smallOf.clear()
+        misses.clear()
     }
 
     /** Whether art is available without any network work. */
-    fun hasLocalArt(track: DesktopTrack): Boolean =
-        downloadedFile(track).exists() ||
+    fun hasLocalArt(track: DesktopTrack): Boolean {
+        val key = disk.keyOf(track.file)
+        if (key != null && disk.has(key)) return true
+        return downloadedFile(track).exists() ||
             embedded(track.file) != null ||
             sidecar(track.file) != null
+    }
+
+    /** The row cover: from memory, else its few kilobytes on disk, else out of the song and onto disk. */
+    private fun loadSmall(track: DesktopTrack): ImageBitmap? {
+        cached(track, SMALL_EDGE)?.let { return it }
+        val path = track.file.absolutePath
+        if (path in misses) return null
+        val key = disk.keyOf(track.file)
+        val bytes = key?.let { disk.read(it, CoverThumbs.Size.SMALL) }
+            ?: render(track, key)?.small
+            ?: return null
+        return keepSmall(path, bytes)
+    }
+
+    /** A row cover's bytes decoded once per picture, however many songs share it. */
+    private fun keepSmall(path: String, bytes: ByteArray): ImageBitmap? {
+        val picture = CoverThumbs.digest(bytes)
+        val bitmap = small[picture]
+            ?: Thumbnails.decodeScaled(bytes, SMALL_EDGE)?.also { small[picture] = it }
+            ?: return null
+        smallOf[path] = picture
+        return bitmap
+    }
+
+    private fun loadLarge(track: DesktopTrack): ImageBitmap? {
+        val path = track.file.absolutePath
+        memory[path]?.let { return it }
+        if (path in misses) return null
+        val key = disk.keyOf(track.file)
+        val bytes = key?.let { disk.read(it, CoverThumbs.Size.LARGE) }
+            ?: render(track, key)?.large
+            ?: return null
+        val bitmap = Thumbnails.decodeScaled(bytes) ?: return null
+        memory[path] = bitmap
+        return bitmap
+    }
+
+    /**
+     * Takes [track]'s cover out of the song - the slow part - and keeps both
+     * sizes on disk under [key]. Null when it has none, which is kept too, so the
+     * song isn't read for it again; only a cover put beside it since is looked for.
+     */
+    private fun render(track: DesktopTrack, key: String?): CoverThumbs.Sizes? {
+        val path = track.file.absolutePath
+        if (key == null) {
+            // Not a file that can be keyed as it is: taken out, and not kept.
+            return sourceOf(track)?.let(::encode).also { if (it == null) misses += path }
+        }
+        return disk.once(key) {
+            // Done meanwhile by whoever had the key.
+            val small = disk.read(key, CoverThumbs.Size.SMALL)
+            val large = disk.read(key, CoverThumbs.Size.LARGE)
+            if (small != null && large != null) return@once CoverThumbs.Sizes(small, large)
+
+            val folder = folderStamp(track.file)
+            rendered.incrementAndGet()
+            val source = when (disk.noneStamp(key)) {
+                // Never looked at: everywhere, the song's own tag included.
+                null -> sourceOf(track)
+                // Looked at, nothing found, and nothing new in its folder since.
+                folder -> {
+                    misses += path
+                    return@once null
+                }
+                // The folder changed. The song didn't - it would have another key - so
+                // only a cover beside it, or one fetched for it, can be new.
+                else -> downloaded(track) ?: sidecar(track.file)
+            }
+            val sizes = source?.let(::encode)
+            if (sizes == null) {
+                runCatching { disk.markNone(key, folder) }
+                misses += path
+            } else {
+                runCatching { disk.write(key, sizes) }
+            }
+            sizes
+        }
+    }
+
+    private fun encode(bytes: ByteArray): CoverThumbs.Sizes? =
+        Thumbnails.encodeSizes(bytes, SMALL_EDGE, Thumbnails.MAX_EDGE)
+            ?.let { (small, large) -> CoverThumbs.Sizes(small, large) }
+
+    /** Changes whenever a file is put in the song's folder, a cover.jpg included. */
+    private fun folderStamp(file: File): Long = file.parentFile?.lastModified() ?: 0L
+
+    private fun sourceOf(track: DesktopTrack): ByteArray? =
+        downloaded(track) ?: embedded(track.file) ?: sidecar(track.file)
+
+    private fun downloaded(track: DesktopTrack): ByteArray? =
+        downloadedFile(track).takeIf { it.isFile }?.let { runCatching { it.readBytes() }.getOrNull() }
 
     private fun downloadedFile(track: DesktopTrack): File =
         File(AppDirs.covers, hash(track.file.absolutePath) + ".img")

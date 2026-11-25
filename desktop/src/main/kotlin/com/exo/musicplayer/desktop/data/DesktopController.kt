@@ -18,6 +18,7 @@ import com.exo.musicplayer.data.library.SearchQuery
 import com.exo.musicplayer.data.library.Genres
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -118,6 +119,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -292,6 +294,19 @@ class DesktopController(parent: CoroutineScope) {
         private set
     var scanningName by mutableStateOf("")
         private set
+
+    init {
+        // Every song's row cover into memory, in the background, so the lists
+        // scroll with their covers there already. Started again when the library
+        // changes; after a moment, so that a scan's run of changes starts it once
+        // and the first screen's covers come first.
+        scope.launch {
+            snapshotFlow { tracks }.collectLatest { library ->
+                delay(800)
+                Covers.warm(library)
+            }
+        }
+    }
 
     var query by mutableStateOf("")
 
@@ -1097,8 +1112,17 @@ class DesktopController(parent: CoroutineScope) {
             settings.glass = value
         }
 
+    /** How see-through the glass is, 0 to 1 (Settings > Appearance). */
+    var glassSeeThrough: Float
+        get() = Glass.seeThrough
+        set(value) {
+            Glass.seeThrough = value.coerceIn(0f, 1f)
+            settings.glassSeeThrough = Glass.seeThrough
+        }
+
     init {
         Glass.on = settings.glass
+        Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)
     }
 
     // Colours from the cover, after Riff (github.com/rootscripts/riff, MIT).

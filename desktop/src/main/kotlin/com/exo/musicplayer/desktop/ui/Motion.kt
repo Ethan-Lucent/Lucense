@@ -49,7 +49,7 @@ object Motion {
  * before the horizontalScroll, on the same [state], so it shades the visible
  * part rather than the content.
  */
-fun Modifier.fadingEdges(state: ScrollState, width: Dp = 28.dp): Modifier = this
+fun Modifier.fadingEdges(state: ScrollState, width: Dp = 44.dp): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     .drawWithContent {
         drawContent()
