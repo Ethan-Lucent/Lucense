@@ -77,6 +77,8 @@ import javax.swing.filechooser.FileNameExtensionFilter
 import com.exo.musicplayer.desktop.system.LogFile
 import com.exo.musicplayer.desktop.data.AppDirs
 import com.exo.musicplayer.desktop.ui.collectNowPlaying
+import com.exo.musicplayer.desktop.system.Mpris
+import com.exo.musicplayer.desktop.system.Platform
 
 /**
  * Windows entry point.
@@ -89,9 +91,27 @@ fun main(args: Array<String>) {
     // Already running - perhaps out of sight in the tray: that one takes the
     // files and comes to the front, and this one goes.
     if (SingleInstance.handOver(args)) return
+    nameTheWindowClass()
     // Before anything has anything to say: from here on it is kept in a file too.
     LogFile.install(File(AppDirs.root, "logs"), AppVersion.name)
     lucense(args)
+}
+
+/**
+ * GNOME, KDE and the rest tie a window to its menu entry - for its icon in the dock
+ * and in Alt+Tab, its name there, and whose notifications are whose - by the
+ * window's X11 class. Java names that after the main class,
+ * "com-exo-musicplayer-desktop-MainKt", which no menu entry is called, so Lucense
+ * showed as that, with a blank icon. The package's entry is lucense-Lucense.desktop,
+ * and a window class of the same name is matched to it. Needs
+ * --add-opens java.desktop/sun.awt.X11 (build.gradle.kts adds it on Linux).
+ */
+private fun nameTheWindowClass() {
+    if (!Platform.isLinux) return
+    runCatching {
+        val toolkit = java.awt.Toolkit.getDefaultToolkit()
+        toolkit.javaClass.getDeclaredField("awtAppClassName").apply { isAccessible = true }.set(toolkit, Mpris.DESKTOP_ENTRY)
+    }.onFailure { System.err.println("Lucense: the window keeps Java's class name (${it.message})") }
 }
 
 private fun lucense(args: Array<String>) = application {

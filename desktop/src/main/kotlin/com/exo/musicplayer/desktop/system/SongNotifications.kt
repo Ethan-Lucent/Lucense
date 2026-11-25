@@ -6,6 +6,8 @@ import org.freedesktop.dbus.interfaces.DBusInterface
 import org.freedesktop.dbus.types.UInt32
 import org.freedesktop.dbus.types.Variant
 import kotlin.concurrent.thread
+import com.exo.musicplayer.desktop.data.AppDirs
+import java.io.File
 
 /**
  * "Now playing" as a desktop notification on Linux, when a song starts - for
@@ -37,11 +39,13 @@ class SongNotifications(private val connect: () -> DBusConnection = { Mpris.sess
                     "category" to Variant("x-gnome.music"),
                     "desktop-entry" to Variant(Mpris.DESKTOP_ENTRY)
                 )
-                iconUrl?.let { hints["image-path"] = Variant(it) }
+                // A song without a cover shows Lucense's icon rather than a broken image.
+                val image = iconUrl ?: appIcon
+                image?.let { hints["image-path"] = Variant(it) }
                 val id = service.Notify(
                     "Lucense",
                     UInt32(lastId),
-                    iconUrl ?: "lucense",
+                    image ?: "",
                     title,
                     artist.orEmpty(),
                     emptyList(),
@@ -57,6 +61,25 @@ class SongNotifications(private val connect: () -> DBusConnection = { Mpris.sess
                 bus = null
             }
         }
+    }
+
+    /**
+     * Lucense's icon as a file: the installed one, or the one inside the app
+     * written out once to the data folder (a development build has no other).
+     */
+    private val appIcon: String? by lazy {
+        runCatching {
+            val installed = File("/opt/lucense/lib/Lucense.png")
+            val file = if (installed.isFile) installed else File(AppDirs.root, "icons/lucense-256.png").also { out ->
+                if (!out.isFile) {
+                    out.parentFile.mkdirs()
+                    SongNotifications::class.java.getResourceAsStream("/icons/lucense-256.png")?.use { input ->
+                        out.outputStream().use { input.copyTo(it) }
+                    }
+                }
+            }
+            file.takeIf { it.isFile }?.toURI()?.toString()
+        }.getOrNull()
     }
 
     fun close() {
