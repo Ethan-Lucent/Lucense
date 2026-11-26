@@ -3,7 +3,9 @@ package com.exo.musicplayer.desktop
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.runtime.CompositionLocalProvider
+import com.exo.musicplayer.desktop.ui.LinuxFrame
 import com.exo.musicplayer.desktop.ui.NativeFrame
+import com.exo.musicplayer.desktop.ui.WindowEdges
 import com.exo.musicplayer.desktop.ui.LocalWindowFrame
 import com.exo.musicplayer.desktop.ui.WindowCorners
 import com.exo.musicplayer.desktop.ui.WindowFrame
@@ -191,18 +193,25 @@ private fun lucense(args: Array<String>) = application {
         // The title strip's close button, like the window's: into the tray when that is chosen.
         val frame = remember { WindowFrame(window) { if (!controller.closeToTray()) exitApplication() } }
         LaunchedEffect(Unit) {
-            // Windows moves, sizes and snaps it from here on; Compose's own
-            // resize border along the edges would only be in the way.
-            if (NativeFrame.install(window, frame)) window.undecoratedResizerThickness = 0.dp
+            // Windows - on Linux, the window manager - moves, sizes and snaps it
+            // from here on; Compose's own resize border along the edges would only
+            // be in the way. On Linux, WindowEdges below takes its place.
+            if (NativeFrame.install(window, frame) || LinuxFrame.install(window, frame)) {
+                window.undecoratedResizerThickness = 0.dp
+            }
             WindowCorners.round(window)
         }
         CompositionLocalProvider(LocalWindowFrame provides frame) {
             LucenseDesktopTheme {
-                // The layout adapts down to about 920 wide (a narrower
-                // sidebar and panel, buttons as icons); only below that is
-                // it drawn smaller, and never under 80 %.
-                ScaledToWindow(designWidth = 920.dp, designHeight = 600.dp, minScale = 0.8f) {
-                    AppHost(controller)
+                Box(Modifier.fillMaxSize()) {
+                    // The layout adapts down to about 920 wide (a narrower
+                    // sidebar and panel, buttons as icons); only below that is
+                    // it drawn smaller, and never under 80 %.
+                    ScaledToWindow(designWidth = 920.dp, designHeight = 600.dp, minScale = 0.8f) {
+                        AppHost(controller)
+                    }
+                    // Over everything, but only along the window's edges.
+                    WindowEdges(frame)
                 }
             }
         }

@@ -8,8 +8,10 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -30,6 +32,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
@@ -39,6 +45,7 @@ import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.ptr.IntByReference
+import java.awt.Cursor
 import java.awt.EventQueue
 import java.awt.MouseInfo
 import java.awt.Point
@@ -56,9 +63,11 @@ import kotlin.math.roundToInt
  * strip along the top to drag it by, and the minimise, maximise and close
  * buttons. On Windows the moving, sizing, maximising and snapping are then
  * handed back to Windows itself ([NativeFrame]), which knows where the strip
- * and the maximise button are from [dragArea] and [maximizeButton]. Only if
- * that can't be set up does the strip move the window by hand, and maximise
- * to the screen's working area.
+ * and the maximise button are from [dragArea] and [maximizeButton]. On Linux
+ * the window manager is asked to do them ([LinuxFrame]), the way GTK's own
+ * windows ask, with [WindowEdges] to size the window by. Only if neither can
+ * be set up does the strip move the window by hand, and maximise to the
+ * screen's working area.
  */
 class WindowFrame(val window: Window, private val onClose: () -> Unit) {
 
@@ -67,6 +76,10 @@ class WindowFrame(val window: Window, private val onClose: () -> Unit) {
 
     /** Windows itself moves, sizes and snaps the window ([NativeFrame]). */
     var native by mutableStateOf(false)
+        private set
+
+    /** The Linux desktop's window manager moves, sizes, snaps and maximises it ([LinuxFrame]). */
+    var managed by mutableStateOf(false)
         private set
 
     /** The strip to drag the window by, in the window's pixels from its top left corner. Read on Windows' own thread. */
@@ -96,13 +109,26 @@ class WindowFrame(val window: Window, private val onClose: () -> Unit) {
 
     fun minimize() {
         nativeMinimize?.let { return it() }
-        (window as? Frame)?.extendedState = Frame.ICONIFIED
+        // Added to the state rather than replacing it: ICONIFIED alone also says
+        // "not maximised", and a maximised window came back from the dock small.
+        (window as? Frame)?.let { it.extendedState = it.extendedState or Frame.ICONIFIED }
     }
 
     fun close() = onClose()
 
     fun toggleMaximize() {
         nativeToggle?.let { return it() }
+        if (managed) {
+            // Asked of the window manager, which maximises to the space beside its
+            // panels and animates it; [attachManaged] hears back what it did.
+            val frame = window as? Frame ?: return
+            frame.extendedState = if (maximized) {
+                frame.extendedState and Frame.MAXIMIZED_BOTH.inv()
+            } else {
+                frame.extendedState or Frame.MAXIMIZED_BOTH
+            }
+            return
+        }
         if (maximized) {
             restore?.let { window.bounds = it }
             maximized = false
@@ -121,6 +147,19 @@ class WindowFrame(val window: Window, private val onClose: () -> Unit) {
         zoomed.set(maximized)
         this.maximized = maximized
         native = true
+    }
+
+    /**
+     * The window manager has the window ([LinuxFrame]): maximised is whatever it
+     * says - after the button, a double-click, a drag to the top of the screen,
+     * Super+Up or its own menu alike.
+     */
+    internal fun attachManaged() {
+        val frame = window as? Frame ?: return
+        fun maximizedIn(state: Int) = state and Frame.MAXIMIZED_BOTH == Frame.MAXIMIZED_BOTH
+        maximized = maximizedIn(frame.extendedState)
+        frame.addWindowStateListener { maximized = maximizedIn(it.newState) }
+        managed = true
     }
 
     /** From Windows' thread, on every size it takes: passed on only when maximised or not changes. */
@@ -207,6 +246,44 @@ fun WindowTitleBar(modifier: Modifier = Modifier, background: Color = Color.Tran
     }
 }
 
+/**
+ * The window's edges and corners to size it by, while the window manager does
+ * the sizing ([LinuxFrame]): a thin strip along each edge and a square at each
+ * corner, the pointer showing which way. Pressed, the window manager takes it
+ * from there, as on its own windows' borders. Nothing while maximised, which
+ * isn't sized; and nothing at all elsewhere, where Compose's own edges are.
+ */
+@Composable
+fun WindowEdges(frame: WindowFrame?) {
+    if (frame == null || !frame.managed || frame.maximized) return
+    val side = 5.dp
+    val corner = 10.dp
+    Box(Modifier.fillMaxSize()) {
+        Edge(frame, LinuxFrame.SIZE_TOP, Cursor.N_RESIZE_CURSOR, Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = corner).height(side))
+        Edge(frame, LinuxFrame.SIZE_BOTTOM, Cursor.S_RESIZE_CURSOR, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = corner).height(side))
+        Edge(frame, LinuxFrame.SIZE_LEFT, Cursor.W_RESIZE_CURSOR, Modifier.align(Alignment.CenterStart).fillMaxHeight().padding(vertical = corner).width(side))
+        Edge(frame, LinuxFrame.SIZE_RIGHT, Cursor.E_RESIZE_CURSOR, Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = corner).width(side))
+        Edge(frame, LinuxFrame.SIZE_TOP_LEFT, Cursor.NW_RESIZE_CURSOR, Modifier.align(Alignment.TopStart).size(corner))
+        Edge(frame, LinuxFrame.SIZE_TOP_RIGHT, Cursor.NE_RESIZE_CURSOR, Modifier.align(Alignment.TopEnd).size(corner))
+        Edge(frame, LinuxFrame.SIZE_BOTTOM_LEFT, Cursor.SW_RESIZE_CURSOR, Modifier.align(Alignment.BottomStart).size(corner))
+        Edge(frame, LinuxFrame.SIZE_BOTTOM_RIGHT, Cursor.SE_RESIZE_CURSOR, Modifier.align(Alignment.BottomEnd).size(corner))
+    }
+}
+
+@Composable
+private fun Edge(frame: WindowFrame, direction: Int, cursor: Int, modifier: Modifier) {
+    Box(
+        modifier
+            .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(cursor)))
+            .pointerInput(frame, direction) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    if (currentEvent.buttons.isPrimaryPressed && LinuxFrame.startResize(frame.window, direction)) down.consume()
+                }
+            }
+    )
+}
+
 /** Where a piece of the layout is in the window, in the window's pixels. */
 private fun LayoutCoordinates.pixelBounds(): Rectangle {
     val bounds = boundsInWindow()
@@ -268,6 +345,11 @@ private fun CaptionButton(
  * While Windows handles the frame a press never arrives here - Windows takes
  * it as one on its own title bar - unless Skia's window was replaced and not
  * yet taught that; then Windows is asked to start the move itself.
+ *
+ * While the Linux window manager handles it ([WindowFrame.managed]), the drag
+ * is handed to it as soon as the pointer moves off the press - a click stays a
+ * click - and it moves the window from there, snapping it to the top or a side
+ * of the screen as it does its own. A right-click shows its window menu.
  */
 private fun Modifier.dragsWindow(frame: WindowFrame): Modifier = pointerInput(frame) {
     var lastPress = 0L
@@ -275,6 +357,10 @@ private fun Modifier.dragsWindow(frame: WindowFrame): Modifier = pointerInput(fr
         awaitFirstDown(requireUnconsumed = false)
         if (frame.native) {
             NativeFrame.startMove(frame.window)
+            return@awaitEachGesture
+        }
+        if (frame.managed && currentEvent.buttons.isSecondaryPressed) {
+            LinuxFrame.showWindowMenu(frame.window)
             return@awaitEachGesture
         }
         val now = System.currentTimeMillis()
@@ -292,6 +378,11 @@ private fun Modifier.dragsWindow(frame: WindowFrame): Modifier = pointerInput(fr
             if (event.changes.none { it.pressed }) break
             val at = MouseInfo.getPointerInfo()?.location ?: break
             if (!moved && (kotlin.math.abs(at.x - start.x) > 3 || kotlin.math.abs(at.y - start.y) > 3)) {
+                // The window manager's from here, where it takes it; by hand otherwise.
+                if (frame.managed && LinuxFrame.startMove(frame.window)) {
+                    event.changes.forEach { it.consume() }
+                    return@awaitEachGesture
+                }
                 moved = true
                 if (frame.maximized) {
                     frame.unmaximizeUnder(at)

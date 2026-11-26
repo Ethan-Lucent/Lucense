@@ -185,9 +185,12 @@ fun CollectionScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     GhostButton("Unpick") { controller.clearPicked() }
-                    Spacer(Modifier.width(10.dp))
                 }
             }
+            // Outside the scrolling part: a cut-off chip fades out short of the buttons.
+            Spacer(Modifier.width(10.dp))
+            // A narrow pane - a small window, or one with a side panel open - has them as icons.
+            val narrow = LocalPaneWidth.current < 860.dp
             if (picked.size >= 2) {
                 AccentButton(
                     "Merge ${picked.size}",
@@ -199,17 +202,25 @@ fun CollectionScreen(
                 }
                 Spacer(Modifier.width(8.dp))
             }
-            GhostButton("Merge duplicates", enabled = !controller.merging, icon = Icons.AutoMirrored.Filled.CallMerge) {
+            val mergeDuplicates = {
                 controller.planDuplicateMerges(kind, groups)
                 onMerge()
             }
-            Spacer(Modifier.width(8.dp))
-            GhostButton("Clear duplicates", icon = Icons.Default.ContentCopy) {
+            val clearDuplicates = {
                 onClearDuplicates(
                     groups.filter { picked.isEmpty() || it.key in picked }
                         .flatMap { it.tracks }
                         .distinctBy { it.file.absolutePath }
                 )
+            }
+            if (narrow) {
+                IconGhostButton("Merge duplicates", Icons.AutoMirrored.Filled.CallMerge, enabled = !controller.merging, onClick = mergeDuplicates)
+                Spacer(Modifier.width(6.dp))
+                IconGhostButton("Clear duplicates", Icons.Default.ContentCopy, onClick = clearDuplicates)
+            } else {
+                GhostButton("Merge duplicates", enabled = !controller.merging, icon = Icons.AutoMirrored.Filled.CallMerge, onClick = mergeDuplicates)
+                Spacer(Modifier.width(8.dp))
+                GhostButton("Clear duplicates", icon = Icons.Default.ContentCopy, onClick = clearDuplicates)
             }
         }
 

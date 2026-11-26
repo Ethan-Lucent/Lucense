@@ -54,6 +54,44 @@ object Glass {
     /** Whether the window is drawn as glass; set from the setting. */
     var on by mutableStateOf(false)
 
+    /**
+     * How see-through the panes are, 0 to 1; set from the setting. Half is the
+     * look glass has always had. Below it, the pane's own colour covers more of
+     * what is behind, until it is all but solid; above it, there is less of that
+     * colour and less frost, until the wallpaper shows nearly as it is.
+     */
+    var seeThrough by mutableFloatStateOf(SEE_THROUGH_DEFAULT)
+
+    const val SEE_THROUGH_DEFAULT = 0.5f
+
+    /** A pane's tint at [seeThrough], for one designed as [alpha] at the default. */
+    fun tint(alpha: Float, seeThrough: Float = this.seeThrough): Float {
+        val at = seeThrough.coerceIn(0f, 1f)
+        return if (at <= SEE_THROUGH_DEFAULT) {
+            between(SOLID, alpha, at / SEE_THROUGH_DEFAULT)
+        } else {
+            between(alpha, alpha * CLEAREST, (at - SEE_THROUGH_DEFAULT) / (1f - SEE_THROUGH_DEFAULT))
+        }
+    }
+
+    /** The frost at [seeThrough]: as designed up to the default, thinning as the glass clears. */
+    fun blur(seeThrough: Float = this.seeThrough): Dp {
+        val at = seeThrough.coerceIn(0f, 1f)
+        if (at <= SEE_THROUGH_DEFAULT) return BLUR
+        return between(BLUR.value, CLEAR_BLUR.value, (at - SEE_THROUGH_DEFAULT) / (1f - SEE_THROUGH_DEFAULT)).dp
+    }
+
+    /** As solid as a pane gets: the same as glass with nothing behind it to blur. */
+    private const val SOLID = 0.92f
+
+    /** The share of its tint the clearest pane keeps: a breath of the theme. */
+    private const val CLEAREST = 0.12f
+
+    private val BLUR = 36.dp
+    private val CLEAR_BLUR = 12.dp
+
+    private fun between(from: Float, to: Float, fraction: Float): Float = from + (to - from) * fraction
+
     /** Corners of the big panes. */
     val PANE = 20.dp
 
@@ -99,8 +137,9 @@ fun Modifier.glassPane(
                 state,
                 HazeStyle(
                     backgroundColor = Palette.Base,
-                    tint = HazeTint(tint.copy(alpha = tintAlpha)),
-                    blurRadius = 36.dp,
+                    // Read here, so a pane follows the see-through slider as it moves.
+                    tint = HazeTint(tint.copy(alpha = Glass.tint(tintAlpha))),
+                    blurRadius = Glass.blur(),
                     noiseFactor = 0.03f
                 )
             )

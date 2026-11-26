@@ -18,8 +18,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.exo.musicplayer.desktop.data.Covers
@@ -38,7 +40,8 @@ import androidx.compose.ui.graphics.graphicsLayer
  * track is known to have no art, the first composition renders the final result
  * with no coroutine and no flash of placeholder. Only a genuine cache miss
  * suspends — which is what keeps a fast-scrolling list from stuttering, the same
- * fix the Android build needed.
+ * fix the Android build needed. With every row cover brought into memory at
+ * startup ([Covers.warm]), a list's rows are nearly always that first case.
  */
 @Composable
 fun Artwork(
@@ -47,31 +50,39 @@ fun Artwork(
     corner: Dp = 5.dp,
     modifier: Modifier = Modifier
 ) {
+    // The cover made for the size it is drawn at: a row's own small one, or the larger.
+    val edge = with(LocalDensity.current) { size.roundToPx() }
     val key = track?.file?.absolutePath
-    val cached = track?.let { Covers.cached(it) }
-    var bitmap by remember(key) { mutableStateOf(cached) }
+    val cached = track?.let { Covers.cached(it, edge) }
+    // A larger cover not in yet has the row-sized one stand in, rather than nothing.
+    val standIn = if (cached == null && edge > Covers.SMALL_EDGE) track?.let { Covers.cached(it, Covers.SMALL_EDGE) } else null
+    var bitmap by remember(key, edge) { mutableStateOf(cached ?: standIn) }
+    // A song with no cover at all, as against one still coming: only it shows the disc.
+    var none by remember(key) { mutableStateOf(track != null && cached == null && standIn == null && Covers.knownMissing(track)) }
     // Already decoded, it is there at once; decoded later, it fades in over the
-    // placeholder instead of popping into a row in the middle of a scroll.
-    val shown = remember(key) { Animatable(if (cached != null) 1f else 0f) }
+    // bare tile instead of popping into a row in the middle of a scroll.
+    val shown = remember(key, edge) { Animatable(if (cached != null || standIn != null) 1f else 0f) }
 
-    LaunchedEffect(key) {
+    LaunchedEffect(key, edge) {
         if (track == null) return@LaunchedEffect
-        if (bitmap == null && !Covers.knownMissing(track)) bitmap = Covers.load(track)
+        if (cached == null && !Covers.knownMissing(track)) Covers.load(track, edge)?.let { bitmap = it }
         // A cover fetched while this is on screen still arrives. Watched here,
         // in this row's own effect: read during composition, every fetch used to
         // recompose every row on screen, the ones with covers included.
         if (bitmap == null) {
+            none = Covers.knownMissing(track)
             snapshotFlow { Covers.revision }.drop(1).first {
-                if (!Covers.knownMissing(track)) bitmap = Covers.load(track)
+                if (!Covers.knownMissing(track)) Covers.load(track, edge)?.let { bitmap = it }
                 bitmap != null
             }
+            none = false
         }
     }
     LaunchedEffect(bitmap != null) {
         if (bitmap != null) shown.animateTo(1f, Motion.change())
     }
 
-    ArtworkFrame(bitmap, size, corner, modifier) { shown.value }
+    ArtworkFrame(bitmap, size, corner, modifier, disc = none && bitmap == null) { shown.value }
 }
 
 @Composable
@@ -80,6 +91,8 @@ private fun ArtworkFrame(
     size: Dp,
     corner: Dp,
     modifier: Modifier,
+    /** Nothing to show, and nothing coming: the disc, in place of a cover. */
+    disc: Boolean,
     /** How far the picture has faded in, read while drawing - no recomposition per frame. */
     shown: () -> Float = { 1f }
 ) {
@@ -90,8 +103,10 @@ private fun ArtworkFrame(
             .background(Palette.Hover),
         contentAlignment = Alignment.Center
     ) {
-        // The placeholder stays underneath, so a cover fading in fades in over it.
-        if (bitmap == null || shown() < 1f) {
+        // A cover still coming has the bare tile, as Spotify's do, and fades in
+        // over it. The disc used to sit there too, and showed through every
+        // cover fading in - a list scrolled fast was all discs.
+        if (disc) {
             Icon(
                 Icons.Default.Album,
                 null,
@@ -104,6 +119,9 @@ private fun ArtworkFrame(
                 bitmap = bitmap,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                // A cover is drawn smaller than it is kept: from mipmaps, it stays
+                // smooth rather than grainy.
+                filterQuality = FilterQuality.Medium,
                 modifier = Modifier.fillMaxSize().graphicsLayer { alpha = shown() }
             )
         }
@@ -124,12 +142,17 @@ fun RemoteArtwork(
     modifier: Modifier = Modifier
 ) {
     var bitmap by remember(url) { mutableStateOf(url?.let(RemoteImages::cached)) }
+    // No address, or nothing at it: the disc. Still loading: the bare tile.
+    var none by remember(url) { mutableStateOf(url == null) }
 
     LaunchedEffect(url) {
-        if (url != null && bitmap == null) bitmap = RemoteImages.load(url)
+        if (url != null && bitmap == null) {
+            bitmap = RemoteImages.load(url)
+            none = bitmap == null
+        }
     }
 
-    ArtworkFrame(bitmap, size, corner, modifier)
+    ArtworkFrame(bitmap, size, corner, modifier, disc = none)
 }
 
 /**

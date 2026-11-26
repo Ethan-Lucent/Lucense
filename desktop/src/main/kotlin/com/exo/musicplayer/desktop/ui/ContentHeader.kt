@@ -220,8 +220,11 @@ internal fun ContentHeader(
                         label = "Favourites",
                         active = controller.favouritesOnly
                     ) { controller.favouritesOnly = !controller.favouritesOnly }
-                    Spacer(Modifier.width(10.dp))
                 }
+                // Outside the scrolling part, so a chip cut off by a narrow
+                // window fades out short of the buttons instead of running
+                // under the first of them.
+                Spacer(Modifier.width(10.dp))
 
                 if (narrowHeader) {
                     IconGhostButton("Bulk tools", Icons.Default.Tune, onClick = onBulk)

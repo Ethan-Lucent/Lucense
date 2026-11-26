@@ -90,7 +90,9 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
     var tab by rememberSaveable { mutableStateOf(SettingsTab.LIBRARY) }
     val tabs = rememberSaveableStateHolder()
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp)) {
+        // Scrolls sideways when the pane is too narrow for seven tabs, rather
+        // than a Row squeezing the last one into a letter per line.
+        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp).fadingHorizontalScroll()) {
             SegmentedRow(
                 options = SettingsTab.entries,
                 selected = tab,
@@ -261,6 +263,30 @@ private fun AppearanceSettings(controller: DesktopController) {
             note = "The window as panes of frosted glass over a soft field of the theme's colours, " +
                 "or over your wallpaper. Rounder controls, lit edges. Uses a little more of the graphics card."
         ) { controller.glass = it }
+        if (controller.glass) {
+            // Under the box it belongs to, in line with its label.
+            Column(Modifier.padding(start = 25.dp, top = 4.dp)) {
+                Text(
+                    "See-through ${(controller.glassSeeThrough * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.TextDim
+                )
+                Slider(
+                    value = controller.glassSeeThrough,
+                    onValueChange = { controller.glassSeeThrough = it },
+                    valueRange = 0f..1f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Palette.Accent,
+                        activeTrackColor = Palette.Accent,
+                        inactiveTrackColor = Palette.Line
+                    )
+                )
+                Hint(
+                    "How much of what's behind the panes shows through them. 50% is the standard look; " +
+                        "lower is more frosted, higher thins the frost until your wallpaper shows nearly as it is."
+                )
+            }
+        }
         Spacer(Modifier.height(6.dp))
         CheckRow(
             "Take the accent from the song's cover",
