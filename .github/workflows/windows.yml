@@ -78,7 +78,9 @@ jobs:
       # one a person's drag runs). Compose shows an uncaught error as a box titled
       # "Error"; any such box, or the app gone, fails the build.
       - name: Start Lucense, resize it, look for error boxes
-        shell: pwsh
+        # Windows PowerShell (.NET Framework): PowerShell 7 drops the default
+        # assemblies (List<> among them) once others are referenced.
+        shell: powershell
         run: |
           Add-Type @"
           using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
