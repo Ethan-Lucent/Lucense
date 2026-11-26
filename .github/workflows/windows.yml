@@ -1,0 +1,160 @@
+# The Windows build of a release. jpackage only packages for the system it runs
+# on, so the installer is made here, on GitHub's Windows, from the release's tag,
+# and then started and resized as a person would before it is attached to the
+# release: a build that shows an error box while resizing is never published.
+name: Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach the Windows files to (e.g. v1.56.4)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: The bundled tools, Windows builds
+        shell: bash
+        run: bash tools/fetch-tools.sh windows
+
+      # Reported, not a gate: a few tests are about Linux's desktop and say so.
+      - name: Tests
+        id: tests
+        continue-on-error: true
+        run: gradle :desktop:test --console=plain
+
+      - name: Installer (Setup.exe with the MSI inside) and the app image
+        run: gradle :desktop:packageSetup :desktop:createDistributable --console=plain
+
+      - name: Collect
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path gradle.properties -Pattern '^lucenseVersion=(.*)$').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force out | Out-Null
+          $bin = "desktop/build/compose/binaries/main"
+          Copy-Item "$bin/setup/Lucense-$version-Setup.exe" out/
+          Copy-Item "$bin/msi/Lucense-$version.msi" out/
+          # The portable build is the app image itself, which the MSI is packaged from.
+          Compress-Archive -Path "$bin/app/Lucense" -DestinationPath "out/Lucense-$version-windows-x64.zip"
+          Get-ChildItem out | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content -Encoding ascii out/SHA256SUMS-windows
+          Get-ChildItem out | Format-Table Name, Length
+
+      # Started from the app image and resized the two ways Windows resizes a
+      # window: told to by another program (SetWindowPos, sixty sizes down to the
+      # minimum and back) and dragged by its corner (Windows' own sizing loop, the
+      # one a person's drag runs). Compose shows an uncaught error as a box titled
+      # "Error"; any such box, or the app gone, fails the build.
+      - name: Start Lucense, resize it, look for error boxes
+        shell: pwsh
+        run: |
+          Add-Type @"
+          using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
+          public static class W {
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+            public static List<KeyValuePair<IntPtr, string>> Of(uint pid) {
+              var found = new List<KeyValuePair<IntPtr, string>>();
+              EnumWindows((h, l) => {
+                uint p; GetWindowThreadProcessId(h, out p);
+                if (p == pid && IsWindowVisible(h)) { var s = new StringBuilder(256); GetWindowText(h, s, 256); found.Add(new KeyValuePair<IntPtr, string>(h, s.ToString())); }
+                return true;
+              }, IntPtr.Zero);
+              return found;
+            }
+            public static void Shot(string path) {
+              var b = System.Windows.Forms.SystemInformation.VirtualScreen;
+              using (var bmp = new System.Drawing.Bitmap(b.Width, b.Height))
+              using (var g = System.Drawing.Graphics.FromImage(bmp)) { g.CopyFromScreen(b.Left, b.Top, 0, 0, bmp.Size); bmp.Save(path); }
+            }
+          }
+          "@ -ReferencedAssemblies System.Drawing, System.Windows.Forms
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          $p = Start-Process "desktop/build/compose/binaries/main/app/Lucense/Lucense.exe" -PassThru
+          $main = $null
+          for ($i = 0; $i -lt 60 -and -not $main; $i++) {
+            Start-Sleep 2
+            $main = [W]::Of($p.Id) | Where-Object { $_.Value -eq "Lucense" } | Select-Object -First 1
+          }
+          if (-not $main) { "No Lucense window:"; [W]::Of($p.Id) | ForEach-Object { $_.Value }; exit 1 }
+          Start-Sleep 10
+          [W]::Shot("$PWD/smoke/1-started.png")
+
+          $sizes = @(@(1200, 800), @(900, 600), @(760, 500), @(1000, 700), @(800, 520), @(1300, 850))
+          for ($i = 0; $i -lt 60; $i++) {
+            $s = $sizes[$i % $sizes.Count]
+            [W]::SetWindowPos($main.Key, [IntPtr]::Zero, 40, 40, $s[0], $s[1], 0x14) | Out-Null   # NOZORDER | NOACTIVATE
+            Start-Sleep -Milliseconds 120
+          }
+          [W]::SetWindowPos($main.Key, [IntPtr]::Zero, 40, 40, 1100, 720, 0x14) | Out-Null
+          Start-Sleep 2
+          [W]::Shot("$PWD/smoke/2-after-setwindowpos.png")
+
+          # A person's drag: press on the bottom right corner, move, let go - three times.
+          [W]::SetForegroundWindow($main.Key) | Out-Null
+          for ($round = 0; $round -lt 3; $round++) {
+            $x = 40 + 1100 - 3; $y = 40 + 720 - 3
+            [W]::SetCursorPos($x, $y) | Out-Null; Start-Sleep -Milliseconds 300
+            [W]::mouse_event(0x2, 0, 0, 0, [UIntPtr]::Zero)          # left down
+            for ($k = 1; $k -le 40; $k++) { [W]::SetCursorPos($x - 9 * $k, $y - 6 * $k) | Out-Null; Start-Sleep -Milliseconds 25 }
+            for ($k = 40; $k -ge 0; $k--) { [W]::SetCursorPos($x - 9 * $k, $y - 6 * $k) | Out-Null; Start-Sleep -Milliseconds 25 }
+            [W]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)          # left up
+            Start-Sleep 1
+          }
+          Start-Sleep 4
+          [W]::Shot("$PWD/smoke/3-after-drag.png")
+
+          $windows = [W]::Of($p.Id)
+          "Windows of Lucense:"; $windows | ForEach-Object { "  '" + $_.Value + "'" }
+          $errors = @($windows | Where-Object { $_.Value -eq "Error" })
+          $alive = -not $p.HasExited
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $env:APPDATA, $env:LOCALAPPDATA -Recurse -Filter *.log -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -like '*Lucense*' } | Copy-Item -Destination smoke/ -ErrorAction SilentlyContinue
+          "alive=$alive errorBoxes=$($errors.Count)"
+          if (-not $alive -or $errors.Count -gt 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lucense-windows
+          path: |
+            out/
+            smoke/
+            desktop/build/reports/tests/
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "${{ inputs.tag }}" out/* --clobber --repo "${{ github.repository }}"
+
+      - name: Test result
+        if: steps.tests.outcome != 'success'
+        run: echo "::warning::Some desktop tests failed on Windows - see the test-reports in the lucense-windows artifact."
