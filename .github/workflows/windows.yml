@@ -5,11 +5,9 @@
 name: Windows
 
 on:
-  # A change to this file on the working branch builds that branch's version
-  # (v + lucenseVersion) - workflow_dispatch only offers workflows on the default branch.
+  # Every release tag pushed (v1.56.5, ...): its own Windows build, attached to its release.
   push:
-    branches: [nux/fixes]
-    paths: [".github/workflows/windows.yml"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:

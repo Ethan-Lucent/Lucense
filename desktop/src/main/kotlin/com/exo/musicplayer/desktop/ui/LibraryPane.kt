@@ -339,9 +339,9 @@ private fun TrackRow(
                 if (isCurrent) Palette.Accent else Palette.Text
             )
             // The names go to their pages; the rest of the row still plays the song.
-            Cell(artistLinks(track) { onOpenGroup(CollectionKind.ARTISTS, it) }, Modifier.weight(1.4f), Palette.TextDim)
+            LinkedCell(artistLinks(track) { onOpenGroup(CollectionKind.ARTISTS, it) }, Modifier.weight(1.4f), Palette.TextDim)
             if (LocalPaneWidth.current >= 640.dp) {
-                Cell(albumLink(track) { onOpenGroup(CollectionKind.ALBUMS, it) }, Modifier.weight(1.4f), Palette.TextDim)
+                LinkedCell(albumLink(track) { onOpenGroup(CollectionKind.ALBUMS, it) }, Modifier.weight(1.4f), Palette.TextDim)
             }
 
             Row(
@@ -422,6 +422,11 @@ private fun Cell(text: AnnotatedString, modifier: Modifier, colour: Color) {
         modifier = modifier.padding(end = 16.dp)
     )
 }
+
+/** A cell of names that open their pages ([LinkedText]), laid out as [Cell]. */
+@Composable
+private fun LinkedCell(links: NameLinks, modifier: Modifier, colour: Color) =
+    LinkedText(links, MaterialTheme.typography.bodyMedium, colour, modifier.padding(end = 16.dp))
 
 private fun revealInExplorer(file: File) = Explorer.reveal(file)
 

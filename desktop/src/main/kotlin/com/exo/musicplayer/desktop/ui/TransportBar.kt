@@ -123,16 +123,14 @@ internal fun TransportBar(
                 val inLibrary = remember(track, controller.tracks) {
                     track != null && controller.tracks.any { it.file == track.file }
                 }
-                Text(
+                LinkedText(
                     when {
-                        track == null -> AnnotatedString("—")
+                        track == null -> NameLinks.plain("—")
                         inLibrary -> artistLinks(track) { onOpenGroup(CollectionKind.ARTISTS, it) }
-                        else -> AnnotatedString(track.displayArtist)
+                        else -> NameLinks.plain(track.displayArtist)
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = Palette.TextDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    color = Palette.TextDim
                 )
             }
             if (track != null) {
