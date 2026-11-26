@@ -5,6 +5,11 @@
 name: Windows
 
 on:
+  # A change to this file on the working branch builds that branch's version
+  # (v + lucenseVersion) - workflow_dispatch only offers workflows on the default branch.
+  push:
+    branches: [nux/fixes]
+    paths: [".github/workflows/windows.yml"]
   workflow_dispatch:
     inputs:
       tag:
@@ -20,7 +25,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Which release
+        shell: bash
+        run: |
+          tag="${{ inputs.tag }}"
+          [ -n "$tag" ] || tag="v$(grep '^lucenseVersion=' gradle.properties | cut -d= -f2 | tr -d '\r')"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "Building for release $tag"
 
       - uses: actions/setup-java@v4
         with:
@@ -153,7 +166,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh release upload "${{ inputs.tag }}" out/* --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$TAG" out/* --clobber --repo "${{ github.repository }}"
 
       - name: Test result
         if: steps.tests.outcome != 'success'
