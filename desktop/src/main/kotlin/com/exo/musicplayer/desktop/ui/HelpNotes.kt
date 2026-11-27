@@ -32,6 +32,15 @@ object Notes {
     const val SHUFFLE = "Plays your songs in a random order."
     const val REPEAT = "Click to go round: repeat everything, repeat this song, or no repeat."
     const val FAVOURITE = "Adds the song to your favourites, or takes it out."
+    const val COVER = "Click for fullscreen lyrics."
+    const val MORE_SLEEP = "Stops the music after this long. Pick it again to start over."
+    const val MORE_SLEEP_SONG = "Stops the music when the song that's on now ends."
+    const val MORE_SLEEP_OFF = "Cancels the sleep timer."
+    const val MORE_MINI = "Shows or hides the small player that stays on top."
+    const val SLEEP_RUNNING = "The music will stop by itself. Click to change or cancel."
+    const val BULK = "Change the details of many songs at once."
+    const val DUPLICATES = "Finds songs that are in your library twice."
+    const val ZIP_AND_SHIP = "Packs songs into a zip file to share or copy elsewhere."
 }
 
 /**

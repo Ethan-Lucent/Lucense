@@ -24,12 +24,10 @@ import androidx.compose.material.icons.automirrored.filled.VolumeMute
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.material.icons.filled.Favorite
@@ -84,10 +82,9 @@ internal fun TransportBar(
     loopEndMs: Long? = null
 ) {
     val panel = controller.sidePanel
-    // A narrow window's bar: a shorter seek line and title, and the two least-used toggles go.
+    // A narrow window's bar: a shorter seek line and title.
     val width = LocalWindowWidth.current
     val narrow = width < 1000.dp
-    val tight = width < 900.dp
     Column {
         if (!Glass.on) Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.Line))
         Row(
@@ -106,7 +103,25 @@ internal fun TransportBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // The song playing can be dragged out by its cover or its name.
-            Artwork(track, 46.dp, modifier = Modifier.dragOutFiles { listOfNotNull(track?.file) })
+            // A click on the cover opens the lyrics fullscreen; a drag still takes the file out.
+            Noted(null, if (track != null) Notes.COVER else null) {
+                Artwork(
+                    track,
+                    46.dp,
+                    modifier = Modifier
+                        .then(
+                            if (track != null) {
+                                Modifier
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .clickable { controller.lyricsFullscreen = true }
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .dragOutFiles { listOfNotNull(track?.file) }
+                )
+            }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.width(if (narrow) 140.dp else 200.dp).dragOutFiles { listOfNotNull(track?.file) }) {
                 Text(
@@ -209,12 +224,15 @@ internal fun TransportBar(
                             )
                         }
                     }
-                    AbLoopButton(
-                        loopStartMs = loopStartMs,
-                        loopEndMs = loopEndMs,
-                        enabled = track != null,
-                        onClick = { controller.cycleAbLoop() }
-                    )
+                    // Out of sight until asked for or in use; the L key works either way.
+                    if (barShows(BarControl.AB_LOOP, Advanced.on, loopStartMs != null)) {
+                        AbLoopButton(
+                            loopStartMs = loopStartMs,
+                            loopEndMs = loopEndMs,
+                            enabled = track != null,
+                            onClick = { controller.cycleAbLoop() }
+                        )
+                    }
                 }
                 Spacer(Modifier.height(4.dp))
                 SeekRow(controller, track, durationMs, narrow, loopStartMs, loopEndMs)
@@ -222,57 +240,6 @@ internal fun TransportBar(
 
             Spacer(Modifier.weight(1f))
 
-            var sleepMenu by remember { mutableStateOf(false) }
-            // Counted down on its own: minutes left are the clock's, and nothing
-            // else redraws the bar for the clock.
-            val sleepLeft by produceState(controller.sleepMinutesLeft, controller.sleepEndsAt) {
-                while (true) {
-                    value = controller.sleepMinutesLeft
-                    delay(15_000)
-                }
-            }
-            if (!tight) Box {
-                BarToggle(
-                    icon = Icons.Default.Bedtime,
-                    label = sleepLeft?.let { "$it min" }
-                        ?: if (controller.stopAfterTrack) "End of song" else "Sleep",
-                    active = controller.sleepEndsAt != null || controller.stopAfterTrack,
-                    highlight = false,
-                    note = Notes.SLEEP
-                ) { sleepMenu = true }
-                DropdownMenu(expanded = sleepMenu, onDismissRequest = { sleepMenu = false }) {
-                    listOf(15, 30, 45, 60, 90).forEach { minutes ->
-                        DropdownMenuItem(
-                            text = { Text("$minutes minutes", color = Palette.Text) },
-                            onClick = {
-                                controller.setSleepTimer(minutes)
-                                sleepMenu = false
-                            }
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("When this song ends", color = Palette.Text) },
-                        onClick = {
-                            controller.sleepAfterTrack()
-                            sleepMenu = false
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Off", color = Palette.TextDim) },
-                        onClick = {
-                            controller.setSleepTimer(null)
-                            sleepMenu = false
-                        }
-                    )
-                }
-            }
-            if (!tight) BarToggle(
-                icon = Icons.Default.PictureInPictureAlt,
-                label = "Mini",
-                active = controller.miniPlayer,
-                highlight = false,
-                note = Notes.MINI
-            ) { controller.miniPlayer = !controller.miniPlayer }
             BarToggle(
                 icon = Icons.AutoMirrored.Filled.QueueMusic,
                 label = "Queue",
@@ -294,13 +261,19 @@ internal fun TransportBar(
                 highlight = !controller.fx.isDefault,
                 note = Notes.EFFECTS
             ) { controller.togglePanel(SidePanelKind.EFFECTS) }
-            BarToggle(
-                icon = Icons.Default.Speaker,
-                label = "Output",
-                active = panel == SidePanelKind.OUTPUT,
-                highlight = controller.selectedOutputs.size > 1,
-                note = Notes.OUTPUT
-            ) { controller.togglePanel(SidePanelKind.OUTPUT) }
+            // Shown when asked for, or when the sound is not going to the one default
+            // device - several at once, or another than the first - so it is never a mystery.
+            val outputInUse = controller.selectedOutputs.size > 1 ||
+                controller.selectedOutputs.firstOrNull() != controller.outputs.firstOrNull()?.name
+            if (barShows(BarControl.OUTPUT, Advanced.on, outputInUse || panel == SidePanelKind.OUTPUT)) {
+                BarToggle(
+                    icon = Icons.Default.Speaker,
+                    label = "Output",
+                    active = panel == SidePanelKind.OUTPUT,
+                    highlight = controller.selectedOutputs.size > 1,
+                    note = Notes.OUTPUT
+                ) { controller.togglePanel(SidePanelKind.OUTPUT) }
+            }
 
             Spacer(Modifier.width(6.dp))
             // Ducking happens while another window has focus, so there has to
@@ -351,6 +324,81 @@ internal fun TransportBar(
                 activeColor = Palette.Accent,
                 modifier = Modifier.width(if (narrow) 72.dp else 96.dp)
             )
+            Spacer(Modifier.width(6.dp))
+            SleepAndMore(controller)
+        }
+    }
+}
+
+/** The bar's controls that are not there for everyone; see [barShows]. */
+internal enum class BarControl(val everyday: Boolean) {
+    QUEUE(true), LYRICS(true), EFFECTS(true),
+    AB_LOOP(false), OUTPUT(false)
+}
+
+/**
+ * Whether a control is on the bar. The everyday ones always are. The rest
+ * show once "Show advanced options" is on, and also whenever they are doing
+ * something ([active]: a loop set, the sound going to another device) -
+ * hiding is only visual, and what is in use must never be out of sight.
+ */
+internal fun barShows(control: BarControl, advanced: Boolean, active: Boolean): Boolean =
+    control.everyday || advanced || active
+
+/** "Sleep timer: 15 min" ... "when this song ends", "off": the rows that set the sleep timer. */
+private fun sleepRows(controller: DesktopController): List<MoreItem> =
+    listOf(15, 30, 45, 60, 90).map { minutes ->
+        MoreItem("Sleep timer: $minutes min", Notes.MORE_SLEEP) { controller.setSleepTimer(minutes) }
+    } + listOf(
+        MoreItem("Sleep timer: when this song ends", Notes.MORE_SLEEP_SONG) { controller.sleepAfterTrack() },
+        MoreItem("Sleep timer: off", Notes.MORE_SLEEP_OFF) { controller.setSleepTimer(null) }
+    )
+
+/**
+ * The right end of the bar: a moon with the time left while a sleep timer
+ * runs (it opens the same sleep rows, so it can be cancelled), and "More",
+ * which holds the sleep timer and the mini player. "More" is lit while the
+ * mini player is up, so something on in it is never hidden.
+ */
+@Composable
+private fun SleepAndMore(controller: DesktopController) {
+    // Counted down on its own: minutes left are the clock's, and nothing
+    // else redraws the bar for the clock.
+    val sleepLeft by produceState(controller.sleepMinutesLeft, controller.sleepEndsAt) {
+        while (true) {
+            value = controller.sleepMinutesLeft
+            delay(15_000)
+        }
+    }
+    var moonOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
+    if (controller.sleepEndsAt != null || controller.stopAfterTrack) {
+        Box {
+            BarToggle(
+                icon = Icons.Default.Bedtime,
+                label = sleepLeft?.let { "Sleep timer: $it min left" } ?: "Sleep timer: when this song ends",
+                active = false,
+                highlight = true,
+                note = Notes.SLEEP_RUNNING
+            ) { moonOpen = !moonOpen }
+            if (moonOpen) MoreItems(sleepRows(controller)) { moonOpen = false }
+        }
+    }
+    Box {
+        BarToggle(
+            icon = Icons.Default.MoreHoriz,
+            label = "More",
+            active = moreOpen,
+            highlight = controller.miniPlayer,
+            note = if (controller.miniPlayer) "The mini player is on." else null
+        ) { moreOpen = !moreOpen }
+        if (moreOpen) {
+            MoreItems(
+                sleepRows(controller) + MoreItem(
+                    if (controller.miniPlayer) "Mini player (on)" else "Mini player",
+                    Notes.MORE_MINI
+                ) { controller.miniPlayer = !controller.miniPlayer }
+            ) { moreOpen = false }
         }
     }
 }

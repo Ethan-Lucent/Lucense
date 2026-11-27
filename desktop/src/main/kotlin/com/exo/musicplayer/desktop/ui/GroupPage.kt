@@ -676,10 +676,16 @@ private fun SongRow(
                     actions.toggleFavourite(track)
                 },
                 NotedMenuItem("Add to playlist...", Notes.ADD_TO_PLAYLIST) { actions.addToPlaylist(listOf(track)) },
-                NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { actions.edit(track) },
                 RatingMenuItem(actions.ratingOf(track)) { actions.rate(track, it) },
-                album?.let { ContextMenuItem("Go to album") { actions.openAlbum(it.key) } },
-                ContextMenuItem(SHOW_IN_FOLDER) { actions.reveal(track.file) }
+                NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { actions.edit(track) },
+                // The seldom-used rows tucked away, as in the library's menu.
+                SubmenuItem(
+                    "More",
+                    listOfNotNull(
+                        album?.let { ContextMenuItem("Go to album") { actions.openAlbum(it.key) } },
+                        ContextMenuItem(SHOW_IN_FOLDER) { actions.reveal(track.file) }
+                    )
+                )
             )
         }
     ) {

@@ -76,6 +76,14 @@ class RatingMenuItem(val current: Int, val onRate: (Int) -> Unit) : ContextMenuI
 class NotedMenuItem(label: String, val note: String, onClick: () -> Unit) : ContextMenuItem(label, onClick)
 
 /**
+ * A row that holds more rows: drawn with a chevron, and opening [items] in a
+ * second panel beside it - on hover, a click, or the Right arrow. Keeps the
+ * top of a long menu short by tucking the seldom-used rows away. One level
+ * only; [items] can be plain, [NotedMenuItem] or [RatingMenuItem] rows.
+ */
+class SubmenuItem(label: String, val items: List<ContextMenuItem>) : ContextMenuItem(label, {})
+
+/**
  * Lucense's own right-click menu, in place of the stock one, which only draws
  * a line of text per item and closes on any click, so it could not hold the
  * rating slider. Provided once at the root, so every ContextMenuArea - and the
@@ -98,7 +106,33 @@ object LucenseContextMenu : ContextMenuRepresentation {
         val list = items()
         val rows = list.indices.filter { list[it] !is RatingMenuItem }
         var selected by remember(status) { mutableStateOf(-1) }
+        // The row whose submenu is showing (-1 for none), whether the keyboard is
+        // in that second level, and the row it has picked there.
+        var opened by remember(status) { mutableStateOf(-1) }
+        var inSub by remember(status) { mutableStateOf(false) }
+        var subSelected by remember(status) { mutableStateOf(-1) }
         var landing by remember(status) { mutableStateOf(false) }
+        val sub = (list.getOrNull(opened) as? SubmenuItem)?.items.orEmpty()
+        val subRows = submenuRows(sub)
+
+        val rate: (RatingMenuItem, Int) -> Unit = { item, stars ->
+            // Held open a moment so the stars are seen to land,
+            // then closed, then saved. Once per menu.
+            if (!landing) {
+                landing = true
+                scope.launch {
+                    delay(RATING_LAND_MS)
+                    close()
+                    item.onRate(stars)
+                }
+            }
+        }
+        // Opens the submenu on row [i], with the keyboard in it when it was a key that opened it.
+        fun openSub(i: Int, byKey: Boolean) {
+            opened = i
+            inSub = byKey
+            subSelected = if (byKey) submenuRows((list[i] as SubmenuItem).items).firstOrNull() ?: -1 else -1
+        }
 
         Popup(
             popupPositionProvider = rememberPopupPositionProviderAtPosition(status.rect.center),
@@ -110,59 +144,154 @@ object LucenseContextMenu : ContextMenuRepresentation {
                     false
                 } else {
                     when (event.key) {
-                        Key.DirectionDown -> { selected = step(rows, selected, 1); true }
-                        Key.DirectionUp -> { selected = step(rows, selected, -1); true }
+                        Key.DirectionDown -> {
+                            if (inSub) subSelected = step(subRows, subSelected, 1) else { selected = step(rows, selected, 1); opened = -1 }
+                            true
+                        }
+                        Key.DirectionUp -> {
+                            if (inSub) subSelected = step(subRows, subSelected, -1) else { selected = step(rows, selected, -1); opened = -1 }
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            if (!inSub && list.getOrNull(selected) is SubmenuItem) {
+                                openSub(selected, true)
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        Key.DirectionLeft -> {
+                            if (opened >= 0) { opened = -1; inSub = false; true } else false
+                        }
                         Key.Enter, Key.NumPadEnter -> {
-                            val item = list.getOrNull(selected)
-                            if (item != null && item !is RatingMenuItem) {
-                                close()
-                                item.onClick()
+                            if (inSub) {
+                                val item = sub.getOrNull(subSelected)
+                                if (item != null && item !is RatingMenuItem) {
+                                    close()
+                                    item.onClick()
+                                }
+                            } else {
+                                val item = list.getOrNull(selected)
+                                when {
+                                    item is SubmenuItem -> openSub(selected, true)
+                                    item != null && item !is RatingMenuItem -> {
+                                        close()
+                                        item.onClick()
+                                    }
+                                }
                             }
                             true
                         }
-                        Key.Escape -> { close(); true }
+                        // Escape closes the second level first, then the menu.
+                        Key.Escape -> {
+                            if (opened >= 0) { opened = -1; inSub = false } else close()
+                            true
+                        }
                         else -> false
                     }
                 }
             }
         ) {
-            Column(
-                Modifier
-                    .width(IntrinsicSize.Max)
-                    .widthIn(min = MENU_MIN_WIDTH)
-                    .floating(8.dp)
-                    .padding(4.dp)
-            ) {
-                list.forEachIndexed { i, item ->
-                    if (item is RatingMenuItem) {
-                        RatingSlider(
-                            item.current,
-                            onPick = { stars ->
-                                // Held open a moment so the stars are seen to land,
-                                // then closed, then saved. Once per menu.
-                                if (!landing) {
-                                    landing = true
-                                    scope.launch {
-                                        delay(RATING_LAND_MS)
-                                        close()
-                                        item.onRate(stars)
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else {
-                        MenuRow(
-                            item.label,
-                            note = (item as? NotedMenuItem)?.note,
-                            lit = i == selected,
-                            onHover = { over -> if (over) selected = i else if (selected == i) selected = -1 }
-                        ) {
-                            close()
-                            item.onClick()
-                        }
+            MenuList(
+                list,
+                selected = if (inSub) -1 else selected,
+                opened = opened,
+                onHover = { i, over ->
+                    if (over) {
+                        selected = i
+                        inSub = false
+                        // Resting on a "More" row opens it; resting on any other closes it.
+                        if (list[i] is SubmenuItem) openSub(i, false) else opened = -1
+                    } else if (selected == i) {
+                        selected = -1
                     }
+                },
+                onPick = { i ->
+                    val item = list[i]
+                    if (item is SubmenuItem) {
+                        openSub(i, false)
+                    } else {
+                        close()
+                        item.onClick()
+                    }
+                },
+                onRate = rate
+            ) { submenu ->
+                // Beside its row, the row's own place being what it is placed by.
+                val gap = with(LocalDensity.current) { SUBMENU_OVERLAP.roundToPx() }
+                val lift = with(LocalDensity.current) { MENU_PAD.roundToPx() }
+                Popup(
+                    popupPositionProvider = remember(gap, lift) { BesideRow(gap, lift) },
+                    // The first level decides when the whole menu closes.
+                    onDismissRequest = {},
+                    properties = PopupProperties(focusable = false)
+                ) {
+                    MenuList(
+                        submenu.items,
+                        selected = if (inSub) subSelected else -1,
+                        opened = -1,
+                        onHover = { i, over ->
+                            if (over) { subSelected = i; inSub = true } else if (subSelected == i) subSelected = -1
+                        },
+                        onPick = { i ->
+                            close()
+                            submenu.items[i].onClick()
+                        },
+                        onRate = rate
+                    ) {}
                 }
+            }
+        }
+    }
+}
+
+/** The rows the keyboard can land on in a submenu: everything but the rating, which wants the mouse. */
+private fun submenuRows(items: List<ContextMenuItem>): List<Int> = items.indices.filter { items[it] !is RatingMenuItem }
+
+/**
+ * One level of the menu: its rows in a floating panel. [selected] and [opened]
+ * (the row whose submenu is showing) are lit; [onHover] and [onPick] say which
+ * row by position. A row that is a [SubmenuItem] shows a chevron and has
+ * [submenuPopup] drawn inside it, so the submenu is placed by that row.
+ */
+@Composable
+private fun MenuList(
+    list: List<ContextMenuItem>,
+    selected: Int,
+    opened: Int,
+    onHover: (Int, Boolean) -> Unit,
+    onPick: (Int) -> Unit,
+    onRate: (RatingMenuItem, Int) -> Unit,
+    submenuPopup: @Composable (SubmenuItem) -> Unit
+) {
+    Column(
+        Modifier
+            .width(IntrinsicSize.Max)
+            .widthIn(min = MENU_MIN_WIDTH)
+            .floating(8.dp)
+            .padding(MENU_PAD)
+    ) {
+        list.forEachIndexed { i, item ->
+            if (item is RatingMenuItem) {
+                RatingSlider(item.current, onPick = { stars -> onRate(item, stars) }, modifier = Modifier.fillMaxWidth())
+            } else if (item is SubmenuItem) {
+                Box {
+                    MenuRow(
+                        item.label,
+                        note = null,
+                        lit = i == selected || i == opened,
+                        onHover = { over -> onHover(i, over) },
+                        chevron = true
+                    ) { onPick(i) }
+                    if (i == opened) submenuPopup(item)
+                }
+            } else {
+                MenuRow(
+                    item.label,
+                    note = (item as? NotedMenuItem)?.note,
+                    lit = i == selected,
+                    onHover = { over -> onHover(i, over) }
+                ) { onPick(i) }
             }
         }
     }
@@ -195,6 +324,8 @@ internal fun MenuRow(
     lit: Boolean,
     onHover: (Boolean) -> Unit,
     enabled: Boolean = true,
+    /** A trailing chevron, for a row that opens a submenu. */
+    chevron: Boolean = false,
     onClick: () -> Unit
 ) {
     var over by remember { mutableStateOf(false) }
@@ -244,8 +375,17 @@ internal fun MenuRow(
             style = MaterialTheme.typography.bodyMedium,
             color = if (enabled) Palette.Text else Palette.TextFaint,
             maxLines = 1,
-            softWrap = false
+            softWrap = false,
+            modifier = if (chevron) Modifier.padding(end = 18.dp) else Modifier
         )
+        if (chevron) {
+            Text(
+                "›",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Palette.TextDim,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
         if (noting && Notes.on && note != null) NoteBubble(note)
     }
 }
@@ -255,7 +395,7 @@ internal fun MenuRow(
 private fun NoteBubble(note: String) {
     val gap = with(LocalDensity.current) { NOTE_GAP.roundToPx() }
     Popup(
-        popupPositionProvider = remember(gap) { BesideRow(gap) },
+        popupPositionProvider = remember(gap) { BesideRow(gap, 0) },
         onDismissRequest = {},
         properties = PopupProperties(focusable = false)
     ) {
@@ -271,7 +411,12 @@ private fun NoteBubble(note: String) {
     }
 }
 
-private class BesideRow(private val gap: Int) : PopupPositionProvider {
+/**
+ * Beside the row it is drawn in: to its right, or to its left where the right
+ * has no room, with its top level with the row's (moved up by [lift], so a
+ * panel's first row, not its edge, is what lines up).
+ */
+private class BesideRow(private val gap: Int, private val lift: Int) : PopupPositionProvider {
     override fun calculatePosition(
         anchorBounds: IntRect,
         windowSize: IntSize,
@@ -284,7 +429,7 @@ private class BesideRow(private val gap: Int) : PopupPositionProvider {
         } else {
             (anchorBounds.left - gap - popupContentSize.width).coerceAtLeast(0)
         }
-        val y = anchorBounds.top.coerceAtMost(windowSize.height - popupContentSize.height).coerceAtLeast(0)
+        val y = (anchorBounds.top - lift).coerceAtMost(windowSize.height - popupContentSize.height).coerceAtLeast(0)
         return IntOffset(x, y)
     }
 }
@@ -442,6 +587,9 @@ internal fun starsLabel(stars: Int): String = when (stars) {
 private val MENU_ROW = 30.dp
 internal val MENU_MIN_WIDTH = 190.dp
 private val NOTE_GAP = 10.dp
+private val MENU_PAD = 4.dp
+/** How far a submenu tucks over its parent's edge, so the pointer never crosses a dead gap. */
+private val SUBMENU_OVERLAP = 2.dp
 private const val NOTE_DELAY_MS = 600L
 private const val RATING_LAND_MS = 300L
 
