@@ -41,6 +41,17 @@ object Notes {
     const val BULK = "Change the details of many songs at once."
     const val DUPLICATES = "Finds songs that are in your library twice."
     const val ZIP_AND_SHIP = "Packs songs into a zip file to share or copy elsewhere."
+
+
+    // The effects panel.
+    const val FX_REMEMBER = "Brings these settings back whenever this song plays."
+    const val FX_FORGET = "This song goes back to using the settings you have on now."
+    const val FX_CLEAR = "Puts speed, pitch and every effect back to normal."
+    const val FX_FINE_TUNE = "Reverb, distortion, lo-fi, tremolo, 8D, echo and the equaliser."
+
+    // The download page.
+    const val DL_OPTIONS = "Format, quality, cover art, and what to cut or keep."
+    const val DL_SIGN_IN = "Shows the YouTube sign-in, for when YouTube refuses downloads."
 }
 
 /**
