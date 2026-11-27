@@ -2323,7 +2323,13 @@ class DesktopController(parent: CoroutineScope) {
      */
     private val linkFinder = YouTubeLinkFinder(youtube)
 
-    val preview = PreviewPlayer { ToolPaths.ffmpeg }
+    // Previews play at the gain the engine is already at (slider, mute, duck and
+    // sleep fade included), read from the same place, so they can't be louder
+    // than the song would be at this setting.
+    val preview = PreviewPlayer(
+        ffmpegPath = { ToolPaths.ffmpeg },
+        volume = { engine.effects.volume },
+    )
 
     var youtubeResults by mutableStateOf<List<YouTubeVideo>>(emptyList())
         private set
