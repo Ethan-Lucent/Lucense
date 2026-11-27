@@ -32,6 +32,16 @@ object Notes {
     const val SHUFFLE = "Plays your songs in a random order."
     const val REPEAT = "Click to go round: repeat everything, repeat this song, or no repeat."
     const val FAVOURITE = "Adds the song to your favourites, or takes it out."
+
+    // The effects panel.
+    const val FX_REMEMBER = "Brings these settings back whenever this song plays."
+    const val FX_FORGET = "This song goes back to using the settings you have on now."
+    const val FX_CLEAR = "Puts speed, pitch and every effect back to normal."
+    const val FX_FINE_TUNE = "Reverb, distortion, lo-fi, tremolo, 8D, echo and the equaliser."
+
+    // The download page.
+    const val DL_OPTIONS = "Format, quality, cover art, and what to cut or keep."
+    const val DL_SIGN_IN = "Shows the YouTube sign-in, for when YouTube refuses downloads."
 }
 
 /**
