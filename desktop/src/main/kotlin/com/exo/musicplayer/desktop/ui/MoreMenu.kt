@@ -66,7 +66,7 @@ fun MoreMenu(label: String = "More", items: List<MoreItem>, iconOnly: Boolean = 
 
 /** The popup under the button; [close] is asked for on a pick, an outside click or Escape. */
 @Composable
-private fun MoreItems(items: List<MoreItem>, close: () -> Unit) {
+internal fun MoreItems(items: List<MoreItem>, close: () -> Unit) {
     val rows = items.indices.filter { items[it].enabled }
     var selected by remember { mutableStateOf(-1) }
     Popup(

@@ -147,12 +147,16 @@ internal fun ContentHeader(
                         tint = Palette.TextDim, modifier = Modifier.size(18.dp)
                     )
                 }
-                Spacer(Modifier.width(6.dp))
-                if (narrowHeader) {
-                    IconGhostButton("Music folder", Icons.Default.FolderOpen) { controller.openMusicFolder() }
-                } else {
-                    GhostButton("Music folder", icon = Icons.Default.FolderOpen) {
-                        controller.openMusicFolder()
+                // Once the library has folders, the music folder is a thing for
+                // Settings; until then it is the way in, so it stays.
+                if (controller.folders.isEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    if (narrowHeader) {
+                        IconGhostButton("Music folder", Icons.Default.FolderOpen) { controller.openMusicFolder() }
+                    } else {
+                        GhostButton("Music folder", icon = Icons.Default.FolderOpen) {
+                            controller.openMusicFolder()
+                        }
                     }
                 }
             }
@@ -226,33 +230,41 @@ internal fun ContentHeader(
                 // under the first of them.
                 Spacer(Modifier.width(10.dp))
 
-                if (narrowHeader) {
-                    IconGhostButton("Bulk tools", Icons.Default.Tune, onClick = onBulk)
-                    Spacer(Modifier.width(6.dp))
-                    IconGhostButton("Duplicates", Icons.Default.ContentCopy, onClick = onDuplicates)
-                    Spacer(Modifier.width(6.dp))
-                    IconGhostButton("Zip and ship", Icons.Default.Archive, enabled = !controller.archiveRunning) {
-                        controller.zipLibrary()
-                    }
-                } else {
-                    GhostButton("Bulk tools", icon = Icons.Default.Tune, onClick = onBulk)
-                    Spacer(Modifier.width(8.dp))
-                    GhostButton(
-                        "Duplicates",
-                        icon = Icons.Default.ContentCopy,
-                        onClick = onDuplicates
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    GhostButton(
-                        "Zip and ship",
-                        enabled = !controller.archiveRunning,
-                        icon = Icons.Default.Archive
-                    ) { controller.zipLibrary() }
-                }
+                // The tools for a whole library live under one button, so the
+                // row is the sort, the filter and one more thing.
+                MoreMenu(
+                    label = "Tidy up",
+                    items = tidyUpItems(
+                        advanced = Advanced.on,
+                        zipRunning = controller.archiveRunning,
+                        onBulk = onBulk,
+                        onDuplicates = onDuplicates,
+                        onZip = { controller.zipLibrary() }
+                    ),
+                    iconOnly = narrowHeader
+                )
             }
         }
     }
 }
+
+/**
+ * What the library header's "Tidy up" button holds: bulk tools and the
+ * duplicate finder always, and "Zip and ship" for those who asked for
+ * advanced options - or while a zip is running, so a job under way is never
+ * out of sight (the row is dimmed then, as the button was).
+ */
+internal fun tidyUpItems(
+    advanced: Boolean,
+    zipRunning: Boolean,
+    onBulk: () -> Unit,
+    onDuplicates: () -> Unit,
+    onZip: () -> Unit
+): List<MoreItem> = listOfNotNull(
+    MoreItem("Bulk tools", Notes.BULK, onClick = onBulk),
+    MoreItem("Find duplicates", Notes.DUPLICATES, onClick = onDuplicates),
+    if (advanced || zipRunning) MoreItem("Zip and ship", Notes.ZIP_AND_SHIP, enabled = !zipRunning, onClick = onZip) else null
+)
 
 @Composable
 private fun FilterToggle(label: String, active: Boolean, onClick: () -> Unit) {

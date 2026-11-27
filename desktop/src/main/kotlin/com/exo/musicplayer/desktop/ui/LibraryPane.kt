@@ -217,21 +217,51 @@ private fun HeaderCell(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * The revert entry, and only when there is something to go back to.
- *
- * A menu offering an action that cannot do anything is worse than one that does
- * not mention it, and a context menu item has no disabled state to use instead.
+ * The right-click menu of a song in the library: what is done to nearly every
+ * song first, in one short list, and the rest under "More" - cutting it,
+ * naming it from its sound, finding the file, undoing what Lucense changed.
+ * Delete stays last, out of the way of the rows used most. Pure on purpose:
+ * the rows and their order can be checked without a window.
  */
-private fun revertItems(controller: DesktopController, track: DesktopTrack): List<ContextMenuItem> =
-    if (!controller.canRevert(track)) {
-        emptyList()
-    } else {
+internal fun songMenu(
+    favourite: Boolean,
+    rating: Int,
+    canRevert: Boolean,
+    onPlay: () -> Unit,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onToggleFavourite: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onEdit: () -> Unit,
+    onRate: (Int) -> Unit,
+    onTrim: () -> Unit,
+    onIdentify: () -> Unit,
+    onShowInFolder: () -> Unit,
+    onRevert: () -> Unit,
+    onDelete: () -> Unit
+): List<ContextMenuItem> = listOf(
+    ContextMenuItem("Play") { onPlay() },
+    NotedMenuItem("Play next", Notes.PLAY_NEXT) { onPlayNext() },
+    NotedMenuItem("Add to queue", Notes.ADD_TO_QUEUE) { onAddToQueue() },
+    ContextMenuItem(if (favourite) "Remove from favourites" else "Add to favourites") { onToggleFavourite() },
+    NotedMenuItem("Add to playlist...", Notes.ADD_TO_PLAYLIST) { onAddToPlaylist() },
+    RatingMenuItem(rating) { onRate(it) },
+    NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { onEdit() },
+    SubmenuItem(
+        "More",
         listOf(
-            NotedMenuItem("Revert to the file's own details", Notes.REVERT) {
-                controller.revertToOriginal(listOf(track))
-            }
-        )
-    }
+            NotedMenuItem("Trim...", Notes.TRIM) { onTrim() },
+            NotedMenuItem("Identify this track", Notes.IDENTIFY) { onIdentify() },
+            ContextMenuItem(Platform.showInFolder) { onShowInFolder() }
+        ) + if (canRevert) {
+            // Only where Lucense has changed the song's details, as before.
+            listOf(NotedMenuItem("Revert to the file's own details", Notes.REVERT) { onRevert() })
+        } else {
+            emptyList()
+        }
+    ),
+    NotedMenuItem("Delete (move to ${Platform.trashName})", Notes.DELETE) { onDelete() }
+)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -258,23 +288,22 @@ private fun TrackRow(
     // arrows and Enter - and can hold the rating as one slider.
     ContextMenuArea(
         items = {
-            listOf(
-                ContextMenuItem("Play") { onPlay() },
-                NotedMenuItem("Play next", Notes.PLAY_NEXT) { controller.playNext(listOf(track)) },
-                NotedMenuItem("Add to queue", Notes.ADD_TO_QUEUE) { controller.addToQueue(listOf(track)) },
-                ContextMenuItem(
-                    if (isFavourite) "Remove from favourites" else "Add to favourites"
-                ) { controller.toggleFavourite(track) },
-                NotedMenuItem("Add to playlist...", Notes.ADD_TO_PLAYLIST) { onAddToPlaylist() },
-                NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { controller.editTarget = track },
-                NotedMenuItem("Trim...", Notes.TRIM) { controller.trimming = track },
-                NotedMenuItem("Identify this track", Notes.IDENTIFY) { onIdentify() },
-                RatingMenuItem(controller.ratingOf(track)) { controller.setRating(track, it) },
-                ContextMenuItem(Platform.showInFolder) { revealInExplorer(track.file) }
-            ) + revertItems(controller, track) + listOf(
-                NotedMenuItem("Delete (move to ${Platform.trashName})", Notes.DELETE) {
-                    controller.deleteTracks(listOf(track))
-                }
+            songMenu(
+                favourite = isFavourite,
+                rating = controller.ratingOf(track),
+                canRevert = controller.canRevert(track),
+                onPlay = onPlay,
+                onPlayNext = { controller.playNext(listOf(track)) },
+                onAddToQueue = { controller.addToQueue(listOf(track)) },
+                onToggleFavourite = { controller.toggleFavourite(track) },
+                onAddToPlaylist = onAddToPlaylist,
+                onEdit = { controller.editTarget = track },
+                onRate = { controller.setRating(track, it) },
+                onTrim = { controller.trimming = track },
+                onIdentify = onIdentify,
+                onShowInFolder = { revealInExplorer(track.file) },
+                onRevert = { controller.revertToOriginal(listOf(track)) },
+                onDelete = { controller.deleteTracks(listOf(track)) }
             )
         }
     ) {
