@@ -54,8 +54,10 @@ library keeps up with new, renamed and deleted files on its own.
 | **A file** | audio *or video* — fingerprinted locally, only frequency peaks leave the machine |
 | **A link** | TikTok, Instagram, YouTube and a thousand more — the audio is fetched, fingerprinted, and thrown away |
 
-Each of Identify's tabs keeps its own box and results while the app is open,
-so switching between them never mixes one search's answers into another.
+Each Identify tab has its own box and results, so one search's answers never
+show up in another. Clicking another tab clears the one you leave, so coming
+back to it later shows it fresh (a search still running there is dropped, not
+shown late).
 
 **Discover** is for finding music you don't have yet: a map of genres to
 wander, in the manner of Every Noise at Once. It's a tab on Android and a page
