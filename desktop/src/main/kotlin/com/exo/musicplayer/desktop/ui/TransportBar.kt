@@ -110,7 +110,7 @@ internal fun TransportBar(
                     }
                 )
                 .padding(horizontal = 20.dp),
-            centreWidth = centreWidth(narrow, showAb),
+            centreWidth = centreWidth(narrow),
             left = {
                 val inLibrary = remember(track, controller.tracks) {
                     track != null && controller.tracks.any { it.file == track.file }
@@ -154,22 +154,17 @@ internal fun TransportBar(
             },
             centre = {
                 BarCentre(
-                    centreWidth(narrow, showAb),
+                    centreWidth(narrow),
                     buttons = {
                         TransportButtons(
                             shuffle = controller.shuffle,
                             repeat = controller.repeat,
                             isPlaying = isPlaying,
-                            showAb = showAb,
-                            loopStartMs = loopStartMs,
-                            loopEndMs = loopEndMs,
-                            abEnabled = track != null,
                             onShuffle = { controller.shuffle = !controller.shuffle },
                             onPrevious = { controller.previous() },
                             onPlay = { controller.togglePlay() },
                             onNext = { controller.next() },
-                            onRepeat = { controller.cycleRepeat() },
-                            onAb = { controller.cycleAbLoop() }
+                            onRepeat = { controller.cycleRepeat() }
                         )
                     },
                     seek = { SeekRow(controller, track, durationMs, loopStartMs, loopEndMs) }
@@ -188,6 +183,11 @@ internal fun TransportBar(
                     onPanel = { controller.togglePanel(it) },
                     onVolume = { controller.volume = it },
                     onMute = { controller.toggleMute() },
+                    abShown = showAb,
+                    loopStartMs = loopStartMs,
+                    loopEndMs = loopEndMs,
+                    abEnabled = track != null,
+                    onAb = { controller.cycleAbLoop() },
                     more = { SleepAndMore(controller) }
                 )
             }
@@ -196,11 +196,7 @@ internal fun TransportBar(
 }
 
 /** The middle slot's width: as wide as the seek line wants, and never narrower than the buttons need. */
-internal fun centreWidth(narrow: Boolean, showAb: Boolean): Dp =
-    maxOf(if (narrow) 284.dp else 380.dp, BUTTONS_NATURAL + if (showAb) AB_BUTTON_WIDTH * 2 else 0.dp)
-
-/** The A-B button's slot: an icon button, 48 dp wide like the others. [TransportButtons] mirrors it on the left. */
-private val AB_BUTTON_WIDTH = 48.dp
+internal fun centreWidth(narrow: Boolean): Dp = maxOf(if (narrow) 284.dp else 380.dp, BUTTONS_NATURAL)
 
 /** shuffle, previous, play, next, repeat side by side with no spare room: 4 round buttons of 48 and the 34 play disc. */
 private val BUTTONS_NATURAL = 48.dp * 4 + 34.dp
@@ -311,22 +307,16 @@ internal fun RowScope.TransportButtons(
     shuffle: Boolean,
     repeat: RepeatMode,
     isPlaying: Boolean,
-    showAb: Boolean,
-    loopStartMs: Long?,
-    loopEndMs: Long?,
-    abEnabled: Boolean,
     onShuffle: () -> Unit,
     onPrevious: () -> Unit,
     onPlay: () -> Unit,
     onNext: () -> Unit,
-    onRepeat: () -> Unit,
-    onAb: () -> Unit
+    onRepeat: () -> Unit
 ) {
-    // The buttons are spread evenly, so A-B on the right alone would drag play off the middle
-    // of the seek line (it sat about 37 px left of it). An empty slot of the same width on the
-    // left makes the row symmetric - spacer and A-B, shuffle and repeat, previous and next
-    // around the play disc - and the disc stays exactly under the middle of the line.
-    if (showAb) Spacer(Modifier.width(AB_BUTTON_WIDTH))
+    // Always these five and nothing optional: the row is symmetric around the play disc, which
+    // sits under the middle of the seek line, and the group as a whole is centred under it. A
+    // sixth button here (A-B used to be one) hung out past one end of the line and, with an empty
+    // slot opposite to keep play centred, left a hole on the other: either way it read as crooked.
     Noted("Shuffle", Notes.SHUFFLE, iconOnly = true) {
         IconButton(onClick = onShuffle) {
             Icon(
@@ -370,8 +360,6 @@ internal fun RowScope.TransportButtons(
             )
         }
     }
-    // Out of sight until asked for or in use; the L key works either way.
-    if (showAb) AbLoopButton(loopStartMs = loopStartMs, loopEndMs = loopEndMs, enabled = abEnabled, onClick = onAb)
 }
 
 /** The right slot: the panel toggles, the volume, More. Its volume line is what shrinks when the slot is short. */
@@ -388,8 +376,16 @@ internal fun RowScope.BarRight(
     onPanel: (SidePanelKind) -> Unit,
     onVolume: (Float) -> Unit,
     onMute: () -> Unit,
+    // A-B loop: out of sight until asked for or in use (the L key works either way). It sits
+    // with the other optional controls, not among the transport buttons.
+    abShown: Boolean = false,
+    loopStartMs: Long? = null,
+    loopEndMs: Long? = null,
+    abEnabled: Boolean = true,
+    onAb: () -> Unit = {},
     more: @Composable () -> Unit
 ) {
+    if (abShown) AbLoopButton(loopStartMs = loopStartMs, loopEndMs = loopEndMs, enabled = abEnabled, onClick = onAb)
     BarToggle(
         icon = Icons.AutoMirrored.Filled.QueueMusic,
         label = "Queue",

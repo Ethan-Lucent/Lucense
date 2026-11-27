@@ -177,7 +177,7 @@ class UiPolishTest {
     @androidx.compose.runtime.Composable
     private fun fakeBar(widthDp: Dp, narrow: Boolean, showAb: Boolean, showOutput: Boolean, title: String, old: Boolean) {
         LucenseDesktopTheme {
-            val centreW = centreWidth(narrow, showAb)
+            val centreW = centreWidth(narrow)
             val left: @androidx.compose.runtime.Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
                 BarNowPlaying(
                     narrow, { Box(Modifier.size(46.dp).background(Palette.Accent)) }, title,
@@ -188,13 +188,13 @@ class UiPolishTest {
                 BarCentre(
                     centreW,
                     buttons = {
-                        TransportButtons(true, RepeatMode.ALL, true, showAb, null, null, true, {}, {}, {}, {}, {}, {})
+                        TransportButtons(true, RepeatMode.ALL, true, {}, {}, {}, {}, {})
                     },
                     seek = { SeekLine(83_000, 243_000, true, null, null) {} }
                 )
             }
             val right: @androidx.compose.runtime.Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
-                BarRight(narrow, SidePanelKind.QUEUE, false, false, showOutput, false, false, 0.6f, {}, {}, {}) {
+                BarRight(narrow, SidePanelKind.QUEUE, false, false, showOutput, false, false, 0.6f, {}, {}, {}, abShown = showAb) {
                     Box(Modifier.size(32.dp))
                 }
             }
@@ -240,7 +240,7 @@ class UiPolishTest {
      * right alone used to push the evenly spread row to the left (play sat ~37 px off).
      */
     @Test
-    fun playButtonStaysUnderTheMiddleOfTheLineWithAbShown() {
+    fun playButtonAndGroupStayCentredWithAbShown() {
         for (width in listOf(760, 920, 1280)) for (ab in listOf(false, true)) {
             runDesktopComposeUiTest(width, 120) {
                 setContent { fakeBar(width.dp, width < 1000, ab, false, "Midnight City", old = false) }
@@ -251,6 +251,20 @@ class UiPolishTest {
                     ((centre.left + centre.right) / 2).value, ((play.left + play.right) / 2).value, 1f,
                     "play under the middle of the line at $width dp (ab=$ab)"
                 )
+                // The whole group is centred under the line, so nothing hangs out on one side: the
+                // gap from the slot's left edge to shuffle equals the gap from repeat to its right edge.
+                val sh = onNodeWithContentDescription("Shuffle on").getBoundsInRoot()
+                val rp = onNodeWithContentDescription("Repeat all").getBoundsInRoot()
+                assertEquals(
+                    (sh.left - centre.left).value, (centre.right - rp.right).value, 1.5f,
+                    "group centred in the slot at $width dp (ab=$ab)"
+                )
+                // A-B, when shown, lives in the right slot with the other optional controls.
+                if (ab) {
+                    val abBox = onNodeWithText("A-B").getBoundsInRoot()
+                    val rightSlot = onNodeWithTag("bar-right").getBoundsInRoot()
+                    assertTrue(abBox.left >= rightSlot.left - 0.5f.dp, "A-B is in the right slot at $width dp")
+                }
                 // And the row is symmetric: shuffle and repeat are as far from play on either side.
                 val shuffle = onNodeWithContentDescription("Shuffle on").getBoundsInRoot()
                 val repeat = onNodeWithContentDescription("Repeat all").getBoundsInRoot()
