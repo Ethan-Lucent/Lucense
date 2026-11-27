@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -48,10 +47,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.exo.musicplayer.data.NameSearch
 import com.exo.musicplayer.data.lyrics.LyricsTerm
 import com.exo.musicplayer.desktop.AppVersion
 import com.exo.musicplayer.desktop.data.AppDirs
 import com.exo.musicplayer.desktop.data.DesktopController
+import com.exo.musicplayer.desktop.data.WALLPAPER_DIM_DEFAULT
+import com.exo.musicplayer.desktop.data.ProxyConfig
 import com.exo.musicplayer.desktop.data.ProxyMode
 import com.exo.musicplayer.desktop.system.DuckKey
 import kotlin.math.roundToInt
@@ -73,11 +75,103 @@ enum class SettingsTab(val label: String) {
 }
 
 /**
+ * Whether a setting meant for people who tune things is shown: when advanced
+ * options are on, or when it is already doing something - a proxy that is set,
+ * ducking that is on - so a behaviour is never left unexplained by hiding.
+ * The one place this rule is written.
+ */
+internal fun rowShown(advanced: Boolean, nonDefault: Boolean): Boolean = advanced || nonDefault
+
+// What "already doing something" means for each tucked-away group; the page and
+// the search below both ask these, so they cannot disagree.
+private fun DesktopController.lyricsOrCoversChanged() =
+    lyricsTerm != LyricsTerm.ARTIST_TITLE || lyricsProviders.any { !lyricsProviderOn(it) } ||
+        coverProviders.any { !coverProviderOn(it) } || coverProvider.isNotBlank()
+
+private fun DesktopController.coloursChanged() =
+    accent == AccentChoice.CUSTOM || settings.lyricsActiveColor.isNotBlank() || settings.lyricsInactiveColor.isNotBlank()
+
+private fun DesktopController.proxyChanged() = proxy != ProxyConfig()
+
+/**
+ * One setting as the search lists it: its name as the page shows it, a few
+ * plain words it is also found by, the tab it is on, and whether it is tucked
+ * away unless Show advanced options is on (or [inUse] says it is doing something).
+ */
+internal class SettingEntry(
+    val label: String,
+    val hint: String,
+    val tab: SettingsTab,
+    val advanced: Boolean = false,
+    val inUse: ((DesktopController) -> Boolean)? = null
+)
+
+/** Every setting row, so the box above the tabs can find one without knowing which tab it is on. */
+internal val settingsIndex: List<SettingEntry> = buildList {
+    val library = SettingsTab.LIBRARY
+    val playback = SettingsTab.PLAYBACK
+    val look = SettingsTab.APPEARANCE
+    val downloads = SettingsTab.DOWNLOADS
+    val links = SettingsTab.INTEGRATIONS
+    add(SettingEntry("Music folders", "where your songs are, add or remove a folder", library))
+    add(SettingEntry("Lyrics search", "which words are used to look up lyrics", library, true) { it.lyricsOrCoversChanged() })
+    add(SettingEntry("Lyrics services", "which sites are asked for lyrics", library, true) { it.lyricsOrCoversChanged() })
+    add(SettingEntry("Cover art services", "where covers come from", library, true) { it.lyricsOrCoversChanged() })
+    add(SettingEntry("Output sample rate", "44.1 kHz 48 kHz 96 kHz audio device", playback, true) { it.settings.outputRate != 0 })
+    add(SettingEntry("Even out volumes", "same loudness for every song, normalise", playback))
+    add(SettingEntry("Fade out on the sleep timer", "gentle ending", playback))
+    add(SettingEntry("Crossfade", "overlap one song into the next", playback))
+    add(SettingEntry("Media keys", "play pause next previous on the keyboard", playback))
+    add(SettingEntry("Keep playing in the tray when the window is closed", "background system tray", playback))
+    add(SettingEntry("Show the mini player while it's in the tray", "small window on top", playback))
+    if (Platform.isWindows) {
+        add(SettingEntry("Offer Lucense for music files in Explorer", "open with default app", playback))
+        add(SettingEntry("Game ducking", "turn the music down with a hotkey while gaming", playback, true) { it.duckEnabled })
+    }
+    add(SettingEntry("Accent colour", "theme colours, swatches, dark light", look))
+    add(SettingEntry("Liquid glass", "frosted panes, transparency", look))
+    add(SettingEntry("Glass see-through", "how much of the background shows through the glass", look, true) {
+        it.glassSeeThrough != Glass.SEE_THROUGH_DEFAULT
+    })
+    add(SettingEntry("Take the accent from the song's cover", "colours from the artwork", look))
+    add(SettingEntry("Show notes when hovering", "tooltips, help text", look))
+    add(SettingEntry("Show advanced options", "expert extra controls", look))
+    add(SettingEntry("Edit colours", "custom theme, lyrics colours", look, true) { it.coloursChanged() })
+    add(SettingEntry("Background", "stars, effect behind the window", look))
+    add(SettingEntry("Wallpaper", "a picture of your own behind everything", look))
+    add(SettingEntry("Wallpaper dim", "darken the picture", look, true) {
+        it.wallpaper != null && it.wallpaperDim != WALLPAPER_DIM_DEFAULT
+    })
+    add(SettingEntry("Downloads folder", "where downloaded songs go", downloads))
+    add(SettingEntry("Write tags and cover art into files", "leave your files untouched", downloads))
+    add(SettingEntry("Proxy", "connect through a proxy, socks, http, vpn", downloads, true) { it.proxyChanged() })
+    if (Platform.isLinux) add(SettingEntry("Show each song as it starts", "desktop notification", links))
+    add(SettingEntry("Show what you're playing on Discord", "rich presence, sharing", links))
+    add(SettingEntry("Keyboard shortcuts", "keys, hotkeys", SettingsTab.KEYS))
+    add(SettingEntry("Updates", "check for a new version", SettingsTab.ABOUT))
+    add(SettingEntry("Backups", "back up favourites and playlists, restore", SettingsTab.ABOUT))
+    add(SettingEntry("Data folder", "where Lucense keeps its files", SettingsTab.ABOUT))
+    add(SettingEntry("Logs", "log files for bug reports", SettingsTab.ABOUT, true))
+}
+
+/**
+ * The settings that match [query]: every word in the name, the hint or the tab
+ * name, in any order and ignoring accents ([NameSearch], as the palette does).
+ * Name matches come first, then the rest, each in page order.
+ */
+internal fun findSettings(query: String): List<SettingEntry> {
+    if (query.isBlank()) return emptyList()
+    return settingsIndex
+        .filter { NameSearch.matches(query, it.label, it.hint, it.tab.label) }
+        .sortedBy { if (NameSearch.matches(query, it.label)) 0 else 1 }
+}
+
+/**
  * Settings, a tab per kind of thing.
  *
  * Sound lives in the Effects panel and output in the Output panel, both a click
  * from the transport bar — this covers the things you set once: where the music
- * is, where downloads go, and where the weather comes from.
+ * is, where downloads go (the weather place is on the Moods page).
  *
  * It used to be one page, a long way down from the music folders to About; a
  * setting was found by scrolling past all the others. Each tab scrolls on its
@@ -89,7 +183,52 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
     // On the controller, so the Ctrl+K palette can open Settings at a tab.
     var tab by controller::settingsTab
     val tabs = rememberSaveableStateHolder()
+    var query by remember { mutableStateOf("") }
+    // The advanced result clicked while advanced options are off, waiting on "Turn on".
+    var pending by remember { mutableStateOf<SettingEntry?>(null) }
     Column(Modifier.fillMaxSize()) {
+        TextInput(
+            value = query,
+            onValueChange = {
+                query = it
+                pending = null
+            },
+            placeholder = "Search settings",
+            leading = Icons.Default.Search,
+            search = true,
+            modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 10.dp)
+        )
+        pending?.let { entry ->
+            Row(
+                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Turn on Show advanced options in Appearance to see this.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.TextDim,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(10.dp))
+                GhostButton("Turn on") {
+                    controller.advancedMode = true
+                    tab = entry.tab
+                    query = ""
+                    pending = null
+                }
+            }
+        }
+        if (query.isNotBlank()) {
+            SettingsResults(controller, query) { entry ->
+                if (entry.advanced && !Advanced.on && entry.inUse?.invoke(controller) != true) {
+                    pending = entry
+                } else {
+                    tab = entry.tab
+                    query = ""
+                }
+            }
+            return@Column
+        }
         // Scrolls sideways when the pane is too narrow for seven tabs, rather
         // than a Row squeezing the last one into a letter per line.
         Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp).fadingHorizontalScroll()) {
@@ -126,7 +265,6 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
                     SettingsTab.INTEGRATIONS -> {
                         if (Platform.isLinux) DesktopNotificationSettings(controller)
                         SharingSettings(controller)
-                        WeatherSettings(controller)
                     }
                     SettingsTab.KEYS -> KeysSettings()
                     SettingsTab.ABOUT -> AboutSettings(controller)
@@ -138,6 +276,40 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
     }
 }
 
+/** The flat list a search shows: each match with its tab in small type, and an Advanced tag where it applies. */
+@Composable
+private fun SettingsResults(controller: DesktopController, query: String, onPick: (SettingEntry) -> Unit) {
+    val found = remember(query) { findSettings(query) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (found.isEmpty()) Hint("No setting matches that. Try another word.")
+        found.forEach { entry ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Palette.Well)
+                    .clickable { onPick(entry) }
+                    .padding(horizontal = 11.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(entry.label, style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
+                    Hint(entry.hint)
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (entry.advanced) "${entry.tab.label} · Advanced" else entry.tab.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Palette.TextFaint
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+    }
+}
 
 @Composable
 private fun MusicFoldersSettings(controller: DesktopController, onChooseFolder: () -> File?) {
@@ -263,7 +435,7 @@ private fun AppearanceSettings(controller: DesktopController) {
             note = "The window as panes of frosted glass over a soft field of the theme's colours, " +
                 "or over your wallpaper. Rounder controls, lit edges. Uses a little more of the graphics card."
         ) { controller.glass = it }
-        if (controller.glass) {
+        if (controller.glass && rowShown(Advanced.on, controller.glassSeeThrough != Glass.SEE_THROUGH_DEFAULT)) {
             // Under the box it belongs to, in line with its label.
             Column(Modifier.padding(start = 25.dp, top = 4.dp)) {
                 Text(
@@ -309,10 +481,13 @@ private fun AppearanceSettings(controller: DesktopController) {
                 "downloader details, fine sliders and more. Nothing is removed when this is off, it is only " +
                 "tucked away. Ctrl+K finds everything either way."
         ) { controller.advancedMode = it }
-        Spacer(Modifier.height(12.dp))
-        GhostButton("Edit colours", icon = Icons.Default.ColorLens) { editingColours = true }
-        Spacer(Modifier.height(6.dp))
-        Hint("Theme colours, the background effect's colour, and the lyrics' current and other lines.")
+        // Picking the Custom swatch opens the editor too, so this is only the way back in.
+        if (rowShown(Advanced.on, controller.coloursChanged())) {
+            Spacer(Modifier.height(12.dp))
+            GhostButton("Edit colours", icon = Icons.Default.ColorLens) { editingColours = true }
+            Spacer(Modifier.height(6.dp))
+            Hint("Theme colours, the background effect's colour, and the lyrics' current and other lines.")
+        }
         if (editingColours) ThemeEditorWindow(controller) { editingColours = false }
 
         Spacer(Modifier.height(18.dp))
@@ -364,7 +539,7 @@ private fun AppearanceSettings(controller: DesktopController) {
             Spacer(Modifier.height(6.dp))
             Hint(note)
         }
-        if (controller.wallpaper != null) {
+        if (controller.wallpaper != null && rowShown(Advanced.on, controller.wallpaperDim != WALLPAPER_DIM_DEFAULT)) {
             Spacer(Modifier.height(12.dp))
             Text(
                 "Dim ${(controller.wallpaperDim * 100).roundToInt()}%",
@@ -390,7 +565,7 @@ private fun AppearanceSettings(controller: DesktopController) {
 private fun GameDuckingSettings(controller: DesktopController) {
 
     // A global hotkey is a Windows thing; Linux desktops keep the keyboard to themselves.
-    if (Platform.isWindows) {
+    if (Platform.isWindows && rowShown(Advanced.on, controller.duckEnabled)) {
 
         Panel(Modifier.fillMaxWidth()) {
             SectionTitle("Game ducking")
@@ -480,24 +655,26 @@ private fun PlaybackOptionsSettings(controller: DesktopController) {
         // Read once, as the engine starts: the whole chain - decoding, effects,
         // the device - is built for one rate.
         var outputRate by remember { mutableStateOf(controller.settings.outputRate) }
-        Text("Output sample rate", style = MaterialTheme.typography.titleMedium, color = Palette.Text)
-        Spacer(Modifier.height(6.dp))
-        SegmentedRow(
-            options = listOf(0, 44_100, 48_000, 96_000),
-            selected = outputRate,
-            label = { if (it == 0) "Automatic" else kiloHertz(it) },
-            onSelect = {
-                outputRate = it
-                controller.settings.outputRate = it
-            }
-        )
-        Spacer(Modifier.height(4.dp))
-        Hint(
-            "Now ${kiloHertz(controller.engine.rate)}" +
-                (if (outputRate == 0) ", the sound system's own rate, so it converts nothing." else ".") +
-                " A change takes effect when Lucense next starts."
-        )
-        Spacer(Modifier.height(14.dp))
+        if (rowShown(Advanced.on, outputRate != 0)) {
+            Text("Output sample rate", style = MaterialTheme.typography.titleMedium, color = Palette.Text)
+            Spacer(Modifier.height(6.dp))
+            SegmentedRow(
+                options = listOf(0, 44_100, 48_000, 96_000),
+                selected = outputRate,
+                label = { if (it == 0) "Automatic" else kiloHertz(it) },
+                onSelect = {
+                    outputRate = it
+                    controller.settings.outputRate = it
+                }
+            )
+            Spacer(Modifier.height(4.dp))
+            Hint(
+                "Now ${kiloHertz(controller.engine.rate)}" +
+                    (if (outputRate == 0) ", the sound system's own rate, so it converts nothing." else ".") +
+                    " A change takes effect when Lucense next starts."
+            )
+            Spacer(Modifier.height(14.dp))
+        }
         CheckRow(
             label = "Even out volumes",
             checked = controller.levelling,
@@ -583,6 +760,9 @@ private fun PlaybackOptionsSettings(controller: DesktopController) {
 
 @Composable
 private fun LyricsAndArtworkSettings(controller: DesktopController) {
+    // The lookup defaults suit most libraries; the section is for tuning them,
+    // and shows itself when one has been changed.
+    if (!rowShown(Advanced.on, controller.lyricsOrCoversChanged())) return
     Panel(Modifier.fillMaxWidth()) {
         SectionTitle("Lyrics and artwork")
         Spacer(Modifier.height(10.dp))
@@ -823,8 +1003,7 @@ private fun AboutSettings(controller: DesktopController) {
             }
             GhostButton("Open") { openFolder(AppDirs.root) }
         }
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        if (Advanced.on) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
                     "Logs",
@@ -884,84 +1063,6 @@ private fun AccentSwatch(choice: AccentChoice, selected: Boolean, onClick: () ->
 private val SWATCH_CELL = 78.dp
 private const val SWATCHES_PER_ROW = 6
 
-@Composable
-private fun WeatherSettings(controller: DesktopController) {
-    var search by remember { mutableStateOf("") }
-
-    Panel(Modifier.fillMaxWidth()) {
-        SectionTitle("Weather")
-        Spacer(Modifier.height(4.dp))
-        Hint(
-            "Moods needs to know what the sky is doing. A computer has no GPS, so " +
-                "Lucense works your city out from your IP address — or you can name it. " +
-                "Conditions come from Open-Meteo, which needs no account."
-        )
-        Spacer(Modifier.height(12.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(Palette.Well)
-                    .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    controller.weatherPlace.ifBlank { "Located from your IP address" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.Text
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            GhostButton("Use my IP", icon = Icons.Default.MyLocation) {
-                controller.useIpLocation()
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextInput(
-                value = search,
-                onValueChange = { search = it },
-                placeholder = "Or type a city",
-                leading = Icons.Default.Search,
-                modifier = Modifier.weight(1f),
-                onSubmit = { controller.searchPlaces(search) }
-            )
-            Spacer(Modifier.width(10.dp))
-            GhostButton("Find", enabled = search.isNotBlank()) {
-                controller.searchPlaces(search)
-            }
-        }
-
-        if (controller.placeResults.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                controller.placeResults.forEach { place ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Palette.Well)
-                            .clickable {
-                                controller.usePlace(place)
-                                search = ""
-                            }
-                            .padding(horizontal = 11.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            place.display,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Palette.TextDim
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 private fun openLink(url: String) {
     runCatching {
         if (Desktop.isDesktopSupported() &&
@@ -992,6 +1093,7 @@ private fun openFolder(dir: File) {
 @Composable
 private fun ProxySettings(controller: DesktopController) {
     val proxy = controller.proxy
+    if (!rowShown(Advanced.on, controller.proxyChanged())) return
     Panel(Modifier.fillMaxWidth()) {
         SectionTitle("Proxy")
         Spacer(Modifier.height(4.dp))

@@ -135,6 +135,17 @@ internal object PaletteSearch {
 
     private val SPACES = Regex("\\s+")
 
+    /**
+     * What the empty box offers, in this order: the few things most often wanted,
+     * rather than the whole list. Shuffle is named by what it will do next, so it
+     * is matched on its first word. Typing still searches everything.
+     */
+    private val STARTERS = listOf(
+        "Play or pause", "Next song", "Previous song", "Shuffle",
+        "Library", "Playlists", "Discover", "Identify", "Download", "Settings"
+    )
+    const val TIP = "Type to find songs, albums, artists, settings and more"
+
     /** 0 for no match; higher is better. */
     fun score(query: String, item: PaletteItem): Int {
         val folded = NameSearch.fold(query).trim().replace(SPACES, " ")
@@ -154,11 +165,17 @@ internal object PaletteSearch {
         }
     }
 
-    /** [items] for [query]: an empty one gives the actions and pages as they are, and no songs. */
+    /** [items] for [query]: an empty one gives the short starter list and a line on typing, and no songs. */
     fun rank(query: String, items: List<PaletteItem>): List<PaletteItem> {
         val folded = NameSearch.fold(query).trim().replace(SPACES, " ")
         if (folded.isEmpty()) {
-            return items.filter { it.section == PaletteSection.ACTIONS || it.section == PaletteSection.PAGES }
+            val starters = STARTERS.mapNotNull { name ->
+                items.firstOrNull {
+                    (it.section == PaletteSection.ACTIONS || it.section == PaletteSection.PAGES) &&
+                        (it.title == name || (name == "Shuffle" && it.title.startsWith("Shuffle ")))
+                }
+            }
+            return starters + PaletteItem(PaletteSection.SEARCH, TIP, icon = Icons.Default.Search)
         }
         val words = folded.split(' ')
         val bySection = HashMap<PaletteSection, MutableList<Pair<PaletteItem, Int>>>()

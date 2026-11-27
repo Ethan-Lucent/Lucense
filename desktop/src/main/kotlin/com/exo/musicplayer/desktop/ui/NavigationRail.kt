@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,6 +29,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.draw.drawWithContent
@@ -52,6 +59,24 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.exo.musicplayer.desktop.data.DesktopController
 import com.exo.musicplayer.desktop.data.DownloadEntry
+
+/**
+ * One run of sidebar pages. [label] is the tiny heading over it (null for the
+ * main pages, and never shown in the narrow icon-only rail); a [foldable] group
+ * can be tucked away behind its heading.
+ */
+internal class RailGroup(val label: String?, val pages: List<Destination>, val foldable: Boolean = false)
+
+/**
+ * The sidebar's pages in groups, in order: what you play, where you find new
+ * music, and the rarely-needed pages tucked under More. Settings sits apart
+ * at the bottom. Every page is still one click (or Ctrl+K) away.
+ */
+internal fun railGroups(): List<RailGroup> = listOf(
+    RailGroup(null, listOf(Destination.LIBRARY, Destination.ALBUMS, Destination.ARTISTS, Destination.PLAYLISTS)),
+    RailGroup("Find music", listOf(Destination.DISCOVER, Destination.IDENTIFY, Destination.DOWNLOAD)),
+    RailGroup("More", listOf(Destination.MOODS, Destination.STATS), foldable = true)
+)
 
 @Composable
 internal fun NavigationRail(
@@ -100,27 +125,93 @@ internal fun NavigationRail(
             Spacer(Modifier.height(10.dp))
             RailSearch(compact) { controller.openPalette() }
             Spacer(Modifier.height(8.dp))
-            Destination.entries.forEach { entry ->
-                if (entry == Destination.DOWNLOAD) {
-                    val downloads = controller.downloads
-                    RailItem(
-                        label = entry.label,
-                        icon = entry.icon,
-                        selected = entry == current,
-                        badge = downloads.count { !it.done },
-                        shine = controller.unseenFinishedDownloads > 0,
-                        compact = compact
-                    ) { onSelect(entry) }
-                    if (!compact) RailDownloads(downloads) { onSelect(Destination.DOWNLOAD) }
-                } else {
-                    RailItem(entry.label, entry.icon, entry == current, compact = compact) { onSelect(entry) }
+            // Scrolls on its own so a short window never pushes Settings off the
+            // bottom; the pages are the part that can outgrow it.
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            railGroups().forEachIndexed { index, group ->
+                if (index > 0) RailDivider()
+                // Starts as it was left, and open when you are on one of its pages or
+                // have asked for the advanced options; the heading still folds it.
+                var open by remember { mutableStateOf(controller.railMoreOpen || current in group.pages || Advanced.on) }
+                if (group.foldable) {
+                    LaunchedEffect(current, Advanced.on) {
+                        if (current in group.pages || Advanced.on) open = true
+                    }
+                }
+                if (!compact && group.label != null) {
+                    if (group.foldable) {
+                        RailFold(group.label, open) {
+                            open = !open
+                            controller.railMoreOpen = open
+                        }
+                    } else {
+                        RailLabel(group.label)
+                    }
+                }
+                // The narrow rail has no headings to fold behind, so it shows every page.
+                if (compact || !group.foldable || open) {
+                    group.pages.forEach { entry ->
+                        if (entry == Destination.DOWNLOAD) {
+                            val downloads = controller.downloads
+                            RailItem(
+                                label = entry.label,
+                                icon = entry.icon,
+                                selected = entry == current,
+                                badge = downloads.count { !it.done },
+                                shine = controller.unseenFinishedDownloads > 0,
+                                compact = compact
+                            ) { onSelect(entry) }
+                            if (!compact) RailDownloads(downloads) { onSelect(Destination.DOWNLOAD) }
+                        } else {
+                            RailItem(entry.label, entry.icon, entry == current, compact = compact) { onSelect(entry) }
+                        }
+                    }
                 }
             }
 
-            Spacer(Modifier.weight(1f))
+            }
             RailItem("Settings", Icons.Default.Settings, settingsOpen, compact = compact, onClick = onSettings)
             Spacer(Modifier.height(10.dp))
         }
+    }
+}
+
+/** A thin line between groups of pages. */
+@Composable
+private fun RailDivider() {
+    Box(Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().height(1.dp).background(Palette.Line))
+}
+
+/** The tiny heading over a group of pages. */
+@Composable
+private fun RailLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = Palette.TextFaint,
+        modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 2.dp)
+    )
+}
+
+/** A heading that folds its group away, with a small arrow that turns when open. */
+@Composable
+private fun RailFold(text: String, open: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .padding(horizontal = 10.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(role = Role.Button, onClick = onToggle)
+            .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.ChevronRight, if (open) "Fold $text" else "Unfold $text",
+            Modifier.size(14.dp).rotate(if (open) 90f else 0f),
+            tint = Palette.TextFaint
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(text, style = MaterialTheme.typography.labelSmall, color = Palette.TextFaint)
     }
 }
 

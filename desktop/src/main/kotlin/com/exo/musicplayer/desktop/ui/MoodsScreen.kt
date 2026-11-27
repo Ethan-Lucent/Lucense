@@ -22,15 +22,19 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -113,6 +117,14 @@ fun MoodsScreen(controller: DesktopController) {
             }
         }
 
+        Spacer(Modifier.height(8.dp))
+        // Open until a place is chosen; after that it is a line you can ignore.
+        // The place itself is the grey line in the panel above.
+        Collapsible(
+            "Where you are",
+            startOpen = controller.weatherPlace.isBlank(),
+            note = "Choose the city the weather comes from."
+        ) { WeatherSettings(controller) }
         Spacer(Modifier.height(14.dp))
 
         when {
@@ -300,5 +312,87 @@ private fun LiftBar(lift: Double) {
                 .clip(RoundedCornerShape(2.dp))
                 .background(Palette.Accent)
         )
+    }
+}
+
+/**
+ * Where the weather comes from. Lives here, not in Settings: it is only used by
+ * this page. Behaves as it did there.
+ */
+@Composable
+internal fun WeatherSettings(controller: DesktopController) {
+    var search by remember { mutableStateOf("") }
+
+    Panel(Modifier.fillMaxWidth()) {
+        SectionTitle("Weather")
+        Spacer(Modifier.height(4.dp))
+        Hint(
+            "Moods needs to know what the sky is doing. A computer has no GPS, so " +
+                "Lucense works your city out from your IP address — or you can name it. " +
+                "Conditions come from Open-Meteo, which needs no account."
+        )
+        Spacer(Modifier.height(12.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Palette.Well)
+                    .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    controller.weatherPlace.ifBlank { "Located from your IP address" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.Text
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            GhostButton("Use my IP", icon = Icons.Default.MyLocation) {
+                controller.useIpLocation()
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextInput(
+                value = search,
+                onValueChange = { search = it },
+                placeholder = "Or type a city",
+                leading = Icons.Default.Search,
+                modifier = Modifier.weight(1f),
+                onSubmit = { controller.searchPlaces(search) }
+            )
+            Spacer(Modifier.width(10.dp))
+            GhostButton("Find", enabled = search.isNotBlank()) {
+                controller.searchPlaces(search)
+            }
+        }
+
+        if (controller.placeResults.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                controller.placeResults.forEach { place ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Palette.Well)
+                            .clickable {
+                                controller.usePlace(place)
+                                search = ""
+                            }
+                            .padding(horizontal = 11.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            place.display,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Palette.TextDim
+                        )
+                    }
+                }
+            }
+        }
     }
 }

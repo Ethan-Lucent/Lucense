@@ -251,6 +251,11 @@ class DesktopSettings {
         get() = prefs.getBoolean(KEY_ADVANCED_MODE, false)
         set(value) = prefs.putBoolean(KEY_ADVANCED_MODE, value)
 
+    /** Whether the sidebar's More group is left unfolded. */
+    var railMoreOpen: Boolean
+        get() = prefs.getBoolean(KEY_RAIL_MORE, false)
+        set(value) = prefs.putBoolean(KEY_RAIL_MORE, value)
+
     /** Whether the song's own cover is shown on Discord rather than the app icon. */
     var discordCover: Boolean
         get() = prefs.getBoolean(KEY_DISCORD_COVER, true)
@@ -350,7 +355,7 @@ class DesktopSettings {
         set(value) = prefs.putBoolean(KEY_WALLPAPER, value)
 
     var wallpaperDim: Float
-        get() = prefs.getFloat(KEY_WALLPAPER_DIM, 0.55f)
+        get() = prefs.getFloat(KEY_WALLPAPER_DIM, WALLPAPER_DIM_DEFAULT)
         set(value) = prefs.putFloat(KEY_WALLPAPER_DIM, value)
 
     /** ARGB hex for the lyric line being sung, or empty to follow the theme. */
@@ -445,6 +450,7 @@ class DesktopSettings {
         const val KEY_NOTIFY_SONGS = "notify_songs"
         const val KEY_HOVER_NOTES = "hover_notes"
         const val KEY_ADVANCED_MODE = "advanced_mode"
+        const val KEY_RAIL_MORE = "rail_more_open"
         const val KEY_CROSSFADE = "crossfade_ms"
         const val KEY_OUTPUT_RATE = "output_rate"
         const val KEY_LIBRARY_SORT = "library_sort"
@@ -485,6 +491,9 @@ class DesktopSettings {
  * button because of an update.
  */
 internal fun advancedDefault(hasLibrary: Boolean): Boolean = hasLibrary
+
+/** How far a wallpaper is darkened until the slider is moved. */
+internal const val WALLPAPER_DIM_DEFAULT = 0.55f
 
 /**
  * The saved choice, or - the first time only - the default, saved on the spot.

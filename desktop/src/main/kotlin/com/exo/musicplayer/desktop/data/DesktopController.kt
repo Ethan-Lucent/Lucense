@@ -1143,6 +1143,16 @@ class DesktopController(parent: CoroutineScope) {
             settings.advancedMode = value
         }
 
+    private val railMoreState = mutableStateOf(settings.railMoreOpen)
+
+    /** Whether the sidebar's More group (Moods, Stats) was left unfolded; remembered across runs. */
+    var railMoreOpen: Boolean
+        get() = railMoreState.value
+        set(value) {
+            railMoreState.value = value
+            settings.railMoreOpen = value
+        }
+
     init {
         Glass.on = settings.glass
         Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)

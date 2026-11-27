@@ -46,9 +46,12 @@ class CommandPaletteTest {
     }
 
     @Test
-    fun anEmptyBoxShowsActionsAndPagesButNoSongs() {
-        val items = listOf(item(PaletteSection.ACTIONS, "Play or pause"), song("Anything"), item(PaletteSection.PAGES, "Albums"))
-        assertEquals(listOf("Play or pause", "Albums"), titles("  ", items))
+    fun anEmptyBoxShowsTheFewStartersAndATipButNoSongs() {
+        val items = listOf(
+            item(PaletteSection.ACTIONS, "Play or pause"), song("Anything"), item(PaletteSection.PAGES, "Library"),
+            item(PaletteSection.PAGES, "Albums"), item(PaletteSection.ACTIONS, "Rescan library")
+        )
+        assertEquals(listOf("Play or pause", "Library", PaletteSearch.TIP), titles("  ", items))
     }
 
     @Test
