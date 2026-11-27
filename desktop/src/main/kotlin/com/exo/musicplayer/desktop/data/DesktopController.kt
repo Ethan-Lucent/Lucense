@@ -3,6 +3,7 @@ package com.exo.musicplayer.desktop.data
 import com.exo.musicplayer.desktop.system.Platform
 import com.exo.musicplayer.desktop.system.Mpris
 import com.exo.musicplayer.desktop.ui.Glass
+import com.exo.musicplayer.desktop.ui.Advanced
 import com.exo.musicplayer.desktop.ui.Notes
 import com.exo.musicplayer.desktop.ui.SettingsTab
 import com.exo.musicplayer.desktop.download.YouTubeAhead
@@ -1134,10 +1135,19 @@ class DesktopController(parent: CoroutineScope) {
             settings.hoverNotes = value
         }
 
+    /** Whether the extra controls are shown; [Advanced.on] is the state, this keeps it and the setting together. */
+    var advancedMode: Boolean
+        get() = Advanced.on
+        set(value) {
+            Advanced.on = value
+            settings.advancedMode = value
+        }
+
     init {
         Glass.on = settings.glass
         Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)
         Notes.on = settings.hoverNotes
+        Advanced.on = settings.advancedMode
     }
 
     // Colours from the cover, after Riff (github.com/rootscripts/riff, MIT).

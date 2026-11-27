@@ -92,6 +92,16 @@ class DesktopSettings {
 
     private val prefs: Preferences = Preferences.userRoot().node("com/exo/musicplayer")
 
+    init {
+        // Decided here, before the controller opens the database, so a fresh
+        // install does not see the empty file it is about to create as a library.
+        resolveAdvanced(
+            stored = prefs.get(KEY_ADVANCED_MODE, null),
+            hasLibrary = { folders.isNotEmpty() || AppDirs.database.exists() },
+            save = { prefs.putBoolean(KEY_ADVANCED_MODE, it) }
+        )
+    }
+
     var folders: List<String>
         get() = prefs.get(KEY_FOLDERS, "").split('|').filter { it.isNotBlank() }
         set(value) = prefs.put(KEY_FOLDERS, value.joinToString("|"))
@@ -232,6 +242,14 @@ class DesktopSettings {
     var hoverNotes: Boolean
         get() = prefs.getBoolean(KEY_HOVER_NOTES, true)
         set(value) = prefs.putBoolean(KEY_HOVER_NOTES, value)
+
+    /**
+     * Whether the extra controls are shown (Settings > Appearance). Always
+     * stored by the time anything reads it - see [resolveAdvanced].
+     */
+    var advancedMode: Boolean
+        get() = prefs.getBoolean(KEY_ADVANCED_MODE, false)
+        set(value) = prefs.putBoolean(KEY_ADVANCED_MODE, value)
 
     /** Whether the song's own cover is shown on Discord rather than the app icon. */
     var discordCover: Boolean
@@ -426,6 +444,7 @@ class DesktopSettings {
         const val KEY_DISCORD_COVER = "discord_cover"
         const val KEY_NOTIFY_SONGS = "notify_songs"
         const val KEY_HOVER_NOTES = "hover_notes"
+        const val KEY_ADVANCED_MODE = "advanced_mode"
         const val KEY_CROSSFADE = "crossfade_ms"
         const val KEY_OUTPUT_RATE = "output_rate"
         const val KEY_LIBRARY_SORT = "library_sort"
@@ -458,4 +477,22 @@ class DesktopSettings {
         const val KEY_PROXY_HOST = "proxy_host"
         const val KEY_PROXY_PORT = "proxy_port"
     }
+}
+
+/**
+ * Whether the extra controls start shown. Off for someone new, who should see
+ * a simple app; on for anyone who already has a library, so nobody loses a
+ * button because of an update.
+ */
+internal fun advancedDefault(hasLibrary: Boolean): Boolean = hasLibrary
+
+/**
+ * The saved choice, or - the first time only - the default, saved on the spot.
+ * Saving it is the point: without it, a new user who adds a music folder
+ * would look like an existing one on the next start and the controls would
+ * appear by themselves. [hasLibrary] is only asked when nothing is saved yet.
+ */
+internal fun resolveAdvanced(stored: String?, hasLibrary: () -> Boolean, save: (Boolean) -> Unit): Boolean {
+    if (stored != null) return stored.toBoolean()
+    return advancedDefault(hasLibrary()).also(save)
 }

@@ -169,7 +169,7 @@ object LucenseContextMenu : ContextMenuRepresentation {
 }
 
 /** The next plain row up or down from [from], round the ends; the first or last when none is picked yet. */
-private fun step(rows: List<Int>, from: Int, by: Int): Int {
+internal fun step(rows: List<Int>, from: Int, by: Int): Int {
     if (rows.isEmpty()) return -1
     val at = rows.indexOf(from)
     return if (at < 0) {
@@ -184,9 +184,19 @@ private fun step(rows: List<Int>, from: Int, by: Int): Int {
  * fill, so the two never show two rows at once. Its note waits until the
  * mouse has rested a moment, and never comes while a button is held - that
  * is someone dragging or clicking, not reading.
+ *
+ * Shared with [MoreMenu], so every menu in the app is this one row. A row that
+ * is not [enabled] is dimmed and does nothing, but still shows its note.
  */
 @Composable
-private fun MenuRow(label: String, note: String?, lit: Boolean, onHover: (Boolean) -> Unit, onClick: () -> Unit) {
+internal fun MenuRow(
+    label: String,
+    note: String?,
+    lit: Boolean,
+    onHover: (Boolean) -> Unit,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
     var over by remember { mutableStateOf(false) }
     var held by remember { mutableStateOf(false) }
     var noting by remember { mutableStateOf(false) }
@@ -204,7 +214,7 @@ private fun MenuRow(label: String, note: String?, lit: Boolean, onHover: (Boolea
             .fillMaxWidth()
             .height(MENU_ROW)
             .clip(RoundedCornerShape(5.dp))
-            .background(hoverFill(lit))
+            .background(hoverFill(lit && enabled))
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
@@ -225,14 +235,14 @@ private fun MenuRow(label: String, note: String?, lit: Boolean, onHover: (Boolea
                     }
                 }
             }
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Text(
             label,
             style = MaterialTheme.typography.bodyMedium,
-            color = Palette.Text,
+            color = if (enabled) Palette.Text else Palette.TextFaint,
             maxLines = 1,
             softWrap = false
         )
@@ -430,7 +440,7 @@ internal fun starsLabel(stars: Int): String = when (stars) {
 }
 
 private val MENU_ROW = 30.dp
-private val MENU_MIN_WIDTH = 190.dp
+internal val MENU_MIN_WIDTH = 190.dp
 private val NOTE_GAP = 10.dp
 private const val NOTE_DELAY_MS = 600L
 private const val RATING_LAND_MS = 300L

@@ -301,6 +301,14 @@ private fun AppearanceSettings(controller: DesktopController) {
             note = "A short note on how to use a button or menu item when you rest the mouse on it. " +
                 "Buttons that are only an icon still show their name."
         ) { controller.hoverNotes = it }
+        Spacer(Modifier.height(6.dp))
+        CheckRow(
+            "Show advanced options",
+            controller.advancedMode,
+            note = "Shows the extra controls for people who want to tune everything: loops, output devices, " +
+                "downloader details, fine sliders and more. Nothing is removed when this is off, it is only " +
+                "tucked away. Ctrl+K finds everything either way."
+        ) { controller.advancedMode = it }
         Spacer(Modifier.height(12.dp))
         GhostButton("Edit colours", icon = Icons.Default.ColorLens) { editingColours = true }
         Spacer(Modifier.height(6.dp))

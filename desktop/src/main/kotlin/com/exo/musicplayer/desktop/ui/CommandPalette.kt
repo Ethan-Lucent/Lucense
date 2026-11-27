@@ -470,6 +470,11 @@ private fun paletteActions(
         PaletteItem(a, "Output", "Speakers and headphones", Icons.Default.Speaker, words = "device audio panel") { controller.togglePanel(SidePanelKind.OUTPUT) },
         PaletteItem(a, "Mini player", "Open or close it", Icons.Default.PictureInPictureAlt, words = "small window") { controller.miniPlayer = !controller.miniPlayer },
         PaletteItem(a, "Keyboard shortcuts", icon = Icons.Default.Keyboard, hint = "/", words = "keys help") { controller.showShortcuts = true },
+        PaletteItem(
+            a, if (Advanced.on) "Hide advanced options" else "Show advanced options",
+            subtitle = "The extra controls for tuning everything",
+            icon = Icons.Default.Tune, words = "advanced expert more extra options settings"
+        ) { controller.advancedMode = !controller.advancedMode },
         PaletteItem(a, "Bulk tools", "Change many songs at once", Icons.Default.AutoFixHigh, words = "edit tags") { onBulk() },
         PaletteItem(a, "Find duplicates", icon = Icons.Default.FilterNone, words = "doubles copies") { onDuplicates() },
         PaletteItem(a, "Rescan library", "Look through the music folders again", Icons.Default.Refresh, words = "refresh scan") { controller.rescan() },

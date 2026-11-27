@@ -1,12 +1,10 @@
 package com.exo.musicplayer.desktop.ui
 
-import androidx.compose.foundation.TooltipArea
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -126,7 +124,6 @@ internal fun NavigationRail(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RailItem(
     label: String,
@@ -138,6 +135,21 @@ private fun RailItem(
     shine: Boolean = false,
     /** Just the icon, centred, its name in a tooltip: the sidebar of a narrow window. */
     compact: Boolean = false,
+    /** A line on what the page is for, in the hover note; see [Noted]. */
+    note: String? = null,
+    onClick: () -> Unit
+) = Noted(if (compact) label else null, note, iconOnly = compact) {
+    RailRow(label, icon, selected, badge, shine, compact, onClick)
+}
+
+@Composable
+private fun RailRow(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    badge: Int,
+    shine: Boolean,
+    compact: Boolean,
     onClick: () -> Unit
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -199,27 +211,12 @@ private fun RailItem(
         ) {
             if (compact) {
                 Spacer(Modifier.weight(1f))
-                TooltipArea(
-                    tooltip = {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Palette.Text,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Palette.Raised)
-                                .border(1.dp, Palette.Line, RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                ) {
-                    Icon(
-                        icon,
-                        contentDescription = label,
-                        tint = if (selected || shine) Palette.Accent else Palette.TextDim,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
+                Icon(
+                    icon,
+                    contentDescription = label,
+                    tint = if (selected || shine) Palette.Accent else Palette.TextDim,
+                    modifier = Modifier.size(19.dp)
+                )
                 Spacer(Modifier.weight(1f))
             } else {
                 Icon(

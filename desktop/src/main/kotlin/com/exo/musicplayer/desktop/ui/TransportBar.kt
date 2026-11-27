@@ -65,8 +65,6 @@ import com.exo.musicplayer.desktop.data.RepeatMode
 import com.exo.musicplayer.desktop.library.DesktopTrack
 import com.exo.musicplayer.util.asDuration
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.border
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -138,13 +136,15 @@ internal fun TransportBar(
             if (track != null) {
                 Spacer(Modifier.width(6.dp))
                 val favourite = track.file.absolutePath in controller.favourites
-                IconButton(onClick = { controller.toggleFavourite(track) }) {
-                    Icon(
-                        if (favourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        "Favourite",
-                        Modifier.size(16.dp),
-                        tint = if (favourite) Palette.Accent else Palette.TextDim
-                    )
+                Noted("Favourite", Notes.FAVOURITE, iconOnly = true) {
+                    IconButton(onClick = { controller.toggleFavourite(track) }) {
+                        Icon(
+                            if (favourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            "Favourite",
+                            Modifier.size(16.dp),
+                            tint = if (favourite) Palette.Accent else Palette.TextDim
+                        )
+                    }
                 }
             }
 
@@ -152,13 +152,15 @@ internal fun TransportBar(
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { controller.shuffle = !controller.shuffle }) {
-                        Icon(
-                            Icons.Default.Shuffle,
-                            if (controller.shuffle) "Shuffle on" else "Shuffle off",
-                            Modifier.size(17.dp),
-                            tint = if (controller.shuffle) Palette.Accent else Palette.TextDim
-                        )
+                    Noted("Shuffle", Notes.SHUFFLE, iconOnly = true) {
+                        IconButton(onClick = { controller.shuffle = !controller.shuffle }) {
+                            Icon(
+                                Icons.Default.Shuffle,
+                                if (controller.shuffle) "Shuffle on" else "Shuffle off",
+                                Modifier.size(17.dp),
+                                tint = if (controller.shuffle) Palette.Accent else Palette.TextDim
+                            )
+                        }
                     }
                     Spacer(Modifier.width(2.dp))
                     IconButton(onClick = { controller.previous() }) {
@@ -193,17 +195,19 @@ internal fun TransportBar(
                         )
                     }
                     Spacer(Modifier.width(2.dp))
-                    IconButton(onClick = { controller.cycleRepeat() }) {
-                        Icon(
-                            if (controller.repeat == RepeatMode.ONE) {
-                                Icons.Default.RepeatOne
-                            } else {
-                                Icons.Default.Repeat
-                            },
-                            controller.repeat.label,
-                            Modifier.size(17.dp),
-                            tint = if (controller.repeat == RepeatMode.OFF) Palette.TextDim else Palette.Accent
-                        )
+                    Noted("Repeat", Notes.REPEAT, iconOnly = true) {
+                        IconButton(onClick = { controller.cycleRepeat() }) {
+                            Icon(
+                                if (controller.repeat == RepeatMode.ONE) {
+                                    Icons.Default.RepeatOne
+                                } else {
+                                    Icons.Default.Repeat
+                                },
+                                controller.repeat.label,
+                                Modifier.size(17.dp),
+                                tint = if (controller.repeat == RepeatMode.OFF) Palette.TextDim else Palette.Accent
+                            )
+                        }
                     }
                     AbLoopButton(
                         loopStartMs = loopStartMs,
@@ -233,7 +237,8 @@ internal fun TransportBar(
                     label = sleepLeft?.let { "$it min" }
                         ?: if (controller.stopAfterTrack) "End of song" else "Sleep",
                     active = controller.sleepEndsAt != null || controller.stopAfterTrack,
-                    highlight = false
+                    highlight = false,
+                    note = Notes.SLEEP
                 ) { sleepMenu = true }
                 DropdownMenu(expanded = sleepMenu, onDismissRequest = { sleepMenu = false }) {
                     listOf(15, 30, 45, 60, 90).forEach { minutes ->
@@ -265,31 +270,36 @@ internal fun TransportBar(
                 icon = Icons.Default.PictureInPictureAlt,
                 label = "Mini",
                 active = controller.miniPlayer,
-                highlight = false
+                highlight = false,
+                note = Notes.MINI
             ) { controller.miniPlayer = !controller.miniPlayer }
             BarToggle(
                 icon = Icons.AutoMirrored.Filled.QueueMusic,
                 label = "Queue",
                 active = panel == SidePanelKind.QUEUE,
-                highlight = false
+                highlight = false,
+                note = Notes.QUEUE
             ) { controller.togglePanel(SidePanelKind.QUEUE) }
             BarToggle(
                 icon = Icons.Default.Lyrics,
                 label = "Lyrics",
                 active = panel == SidePanelKind.LYRICS,
-                highlight = controller.lyricsPlain != null
+                highlight = controller.lyricsPlain != null,
+                note = Notes.LYRICS
             ) { controller.togglePanel(SidePanelKind.LYRICS) }
             BarToggle(
                 icon = Icons.Default.GraphicEq,
                 label = "Effects",
                 active = panel == SidePanelKind.EFFECTS,
-                highlight = !controller.fx.isDefault
+                highlight = !controller.fx.isDefault,
+                note = Notes.EFFECTS
             ) { controller.togglePanel(SidePanelKind.EFFECTS) }
             BarToggle(
                 icon = Icons.Default.Speaker,
                 label = "Output",
                 active = panel == SidePanelKind.OUTPUT,
-                highlight = controller.selectedOutputs.size > 1
+                highlight = controller.selectedOutputs.size > 1,
+                note = Notes.OUTPUT
             ) { controller.togglePanel(SidePanelKind.OUTPUT) }
 
             Spacer(Modifier.width(6.dp))
@@ -365,31 +375,35 @@ private fun BarToggle(
     label: String,
     active: Boolean,
     highlight: Boolean,
+    /** A line on what it does, under its name in the hover note; see [Noted]. */
+    note: String? = null,
     onClick: () -> Unit
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    Box(
-        Modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(7.dp))
-            .background(
-                when {
-                    active -> Palette.Selected
-                    hovered -> Palette.Hover
-                    else -> Color.Transparent
-                }
+    Noted(label, note, iconOnly = true) {
+        Box(
+            Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(
+                    when {
+                        active -> Palette.Selected
+                        hovered -> Palette.Hover
+                        else -> Color.Transparent
+                    }
+                )
+                .hoverable(interaction)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                modifier = Modifier.size(17.dp),
+                tint = if (active || highlight) Palette.Accent else Palette.TextDim
             )
-            .hoverable(interaction)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            modifier = Modifier.size(17.dp),
-            tint = if (active || highlight) Palette.Accent else Palette.TextDim
-        )
+        }
     }
 }
 
@@ -397,7 +411,6 @@ private fun BarToggle(
  * The A-B loop button, beside repeat: "A-B" dim while off, "A" lit once A is
  * set, "A-B" lit while going round. The L key does the same.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AbLoopButton(loopStartMs: Long?, loopEndMs: Long?, enabled: Boolean, onClick: () -> Unit) {
     val looping = loopStartMs != null && loopEndMs != null
@@ -407,20 +420,7 @@ private fun AbLoopButton(loopStartMs: Long?, loopEndMs: Long?, enabled: Boolean,
         armed -> "A at ${loopStartMs!!.asDuration()} - click again for B (L)"
         else -> "Loop part of the song: A here, then B (L)"
     }
-    TooltipArea(
-        tooltip = {
-            Text(
-                tip,
-                style = MaterialTheme.typography.labelMedium,
-                color = Palette.Text,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Palette.Raised)
-                    .border(1.dp, Palette.Line, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-        }
-    ) {
+    Noted("A-B loop", tip, iconOnly = true) {
         IconButton(onClick = onClick, enabled = enabled) {
             Text(
                 if (armed) "A" else "A-B",
