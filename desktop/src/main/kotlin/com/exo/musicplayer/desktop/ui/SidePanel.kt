@@ -472,10 +472,6 @@ private fun FineTuneControls(fx: DesktopFxState, onFx: (DesktopFxState) -> Unit)
             color = Palette.Text,
             modifier = Modifier.weight(1f)
         )
-        if (fx.eqEnabled) {
-            GhostButton("Flat") { onFx(fx.copy(eqGains = List(EQ_LABELS.size) { 0f })) }
-            Spacer(Modifier.width(8.dp))
-        }
         Switch(
             checked = fx.eqEnabled,
             onCheckedChange = { onFx(fx.copy(eqEnabled = it)) },
@@ -489,6 +485,16 @@ private fun FineTuneControls(fx: DesktopFxState, onFx: (DesktopFxState) -> Unit)
         )
     }
     if (fx.eqEnabled) {
+        Spacer(Modifier.height(10.dp))
+        // Selected follows the gains, so dragging a band off a preset deselects it.
+        val current = matchingEqPreset(fx.eqGains)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            EqPreset.entries.forEach { preset ->
+                Noted(null, preset.note) {
+                    Preset(preset.label, current == preset) { onFx(fx.applyingEq(preset)) }
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
         EqualizerBands(fx.eqGains) { band, db ->
             onFx(fx.copy(eqGains = fx.eqGains.toMutableList().also { it[band] = db }))
