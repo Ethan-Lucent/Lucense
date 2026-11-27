@@ -87,7 +87,9 @@ fun IdentifyScreen(controller: DesktopController, onChooseMedia: () -> File?) {
                     options = IdentifyMode.entries,
                     selected = mode,
                     label = { it.label },
-                    onSelect = { controller.identifyMode = it }
+                    // The tab bar clears the tab you leave; other code that changes
+                    // identifyMode is carrying text across and must not.
+                    onSelect = { controller.switchIdentifyTab(it) }
                 )
             }
             Spacer(Modifier.height(6.dp))

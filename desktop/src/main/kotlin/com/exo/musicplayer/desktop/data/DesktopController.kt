@@ -2254,24 +2254,6 @@ class DesktopController(parent: CoroutineScope) {
 
     // ---- Identify -----------------------------------------------------------
 
-    /**
-     * One Identify tab's own box, results and word on how it went.
-     *
-     * The tabs used to share one box, one list and one status line, so a
-     * lyrics search's results showed under Name, and a search that finished
-     * after the tab was changed landed in whichever tab was open by then. Now
-     * each tab keeps its own for as long as the app is open (not from one
-     * launch to the next), and a search writes into the tab it was started
-     * from.
-     */
-    class IdentifyTab {
-        var query by mutableStateOf("")
-        var results by mutableStateOf<List<MusicMatch>>(emptyList())
-        var status by mutableStateOf<String?>(null)
-        var busy by mutableStateOf(false)
-        var needsFfmpeg by mutableStateOf(false)
-    }
-
     private val identifyTabs = IdentifyMode.entries.associateWith { IdentifyTab() }
 
     /** The tab [mode] keeps; the open one by default. */
@@ -2293,6 +2275,28 @@ class DesktopController(parent: CoroutineScope) {
     /** Artist and title asked for separately, so each can be scored on its own field. */
     var identifyArtist by mutableStateOf("")
     var identifyTitle by mutableStateOf("")
+
+    /**
+     * The tab bar's switch: clears the tab being left, then opens [to].
+     *
+     * Only the tab bar calls this. The buttons that carry text from one tab to
+     * another set [identifyMode] directly, because there the text has to
+     * survive the move.
+     */
+    fun switchIdentifyTab(to: IdentifyMode) {
+        if (to == identifyMode) return
+        clearLeftIdentifyTab(identifyMode, identifyTabs) { left ->
+            when (left) {
+                IdentifyMode.NAME -> {
+                    identifyArtist = ""
+                    identifyTitle = ""
+                }
+                IdentifyMode.YOUTUBE -> resetYouTubeTab()
+                else -> Unit
+            }
+        }
+        identifyMode = to
+    }
 
     // ---- YouTube search -----------------------------------------------------
     //
@@ -2327,14 +2331,32 @@ class DesktopController(parent: CoroutineScope) {
     var youtubeStatus by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Bumped whenever the YouTube tab is cleared, the same job
+     * [IdentifyTab.generation] does for the other tabs: a search that was
+     * started before the clear finds the number changed and drops its answer.
+     */
+    private var youtubeGeneration = 0
+
+    /** Empties the YouTube tab (box, results, status, busy bar). The preview card is left alone. */
+    private fun resetYouTubeTab() {
+        youtubeGeneration++
+        youtubeQuery = ""
+        youtubeResults = emptyList()
+        youtubeStatus = null
+        youtubeBusy = false
+    }
+
     fun searchYouTube(text: String = youtubeQuery) {
         val query = text.trim()
         if (query.isBlank() || youtubeBusy) return
 
         youtubeBusy = true
         youtubeStatus = "Searching YouTube…"
+        val generation = youtubeGeneration
         scope.launch {
             val result = youtube.search(query, limit = 25)
+            if (generation != youtubeGeneration) return@launch
             youtubeResults = result.videos
             youtubeStatus = when {
                 result.videos.isEmpty() ->
@@ -2666,8 +2688,10 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Searching lyrics..."
+        val generation = tab.generation
         scope.launch {
             val results = lyricSearch.searchAll(text, limitPer = 8)
+            if (!tab.accepts(generation)) return@launch
             tab.results = results
             tab.status = if (results.isEmpty()) {
                 "No song matched those words. Try a longer or more distinctive line."
@@ -2690,7 +2714,8 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Reading ${file.name}..."
-        scope.launch { fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab) }
+        val generation = tab.generation
+        scope.launch { fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab, generation = generation) }
     }
 
     /**
@@ -2712,6 +2737,7 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Fetching audio from that link..."
+        val generation = tab.generation
 
         scope.launch {
             val staging = io {
@@ -2719,11 +2745,14 @@ class DesktopController(parent: CoroutineScope) {
             }
             try {
                 val resolved = io { LinkResolver.resolve(target) }
+                if (!tab.accepts(generation)) return@launch
                 val fetchTarget = when (resolved) {
                     is ResolvedLink.Direct -> resolved.url
                     is ResolvedLink.Search -> {
                         tab.status = "Finding that track on YouTube..."
-                        when (val found = linkFinder.find(YouTubeLinkFinder.Wanted(title = resolved.query))) {
+                        val outcome = linkFinder.find(YouTubeLinkFinder.Wanted(title = resolved.query))
+                        if (!tab.accepts(generation)) return@launch
+                        when (val found = outcome) {
                             is YouTubeLinkFinder.Outcome.Found -> found.pick.video.watchUrl
                             is YouTubeLinkFinder.Outcome.NothingSuitable -> {
                                 tab.status = found.message
@@ -2748,12 +2777,13 @@ class DesktopController(parent: CoroutineScope) {
                     embedThumbnail = false,
                     wholePlaylist = false,
                     onProgress = { progress ->
-                        progress.percent?.let {
+                        progress.percent?.takeIf { tab.accepts(generation) }?.let {
                             tab.status = "Fetching audio... ${(it * 100).toInt()}%"
                         }
                     }
                 )
 
+                if (!tab.accepts(generation)) return@launch
                 val file = result.getOrNull()?.firstOrNull()
                 if (file == null) {
                     tab.status = result.exceptionOrNull()?.message
@@ -2761,16 +2791,29 @@ class DesktopController(parent: CoroutineScope) {
                     tab.busy = false
                     return@launch
                 }
-                fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab)
+                fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab, generation = generation)
             } finally {
                 io { staging.deleteRecursively() }
             }
         }
     }
 
-    /** Shared tail of every fingerprint route. */
-    private suspend fun fingerprint(file: File, fallbackName: String, markPath: String?, tab: IdentifyTab) {
-        when (val outcome = MediaAudio.sample(file)) {
+    /**
+     * Shared tail of every fingerprint route.
+     *
+     * [generation] is the tab's number when the work began; if the tab was
+     * cleared meanwhile (the user left it), the answer is dropped.
+     */
+    private suspend fun fingerprint(
+        file: File,
+        fallbackName: String,
+        markPath: String?,
+        tab: IdentifyTab,
+        generation: Int
+    ) {
+        val outcome = MediaAudio.sample(file)
+        if (!tab.accepts(generation)) return
+        when (outcome) {
             SampleOutcome.NeedsFfmpeg -> {
                 tab.needsFfmpeg = true
                 tab.status = "That format needs ffmpeg - one click in the Download tab."
@@ -2784,7 +2827,9 @@ class DesktopController(parent: CoroutineScope) {
 
             is SampleOutcome.Ok -> {
                 tab.status = "Matching against Shazam..."
-                when (val result = shazam.recognize(outcome.samples)) {
+                val recognised = shazam.recognize(outcome.samples)
+                if (!tab.accepts(generation)) return
+                when (val result = recognised) {
                     is RecognitionResult.Found -> {
                         tab.results = result.matches
                         val best = result.matches.firstOrNull()
@@ -2824,11 +2869,13 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Searching seven catalogues..."
+        val generation = tab.generation
         scope.launch {
             // Providers take a single string, so the halves are joined for the
             // lookup and separated again only for scoring.
             val combined = listOf(artist, title).filter { it.isNotBlank() }.joinToString(" ")
             val found = catalogue.searchAll(combined, limitPer = 8)
+            if (!tab.accepts(generation)) return@launch
             val results = MatchRanker.rankSplit(artist, title, found)
             tab.results = results
 
@@ -2852,8 +2899,10 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Searching seven catalogues…"
+        val generation = tab.generation
         scope.launch {
             val found = catalogue.searchAll(text, limitPer = 8)
+            if (!tab.accepts(generation)) return@launch
             // Providers each answer loosely and none of them can see the others,
             // so relevance is decided here rather than trusting whatever order
             // they came back in.
@@ -2881,8 +2930,9 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Fingerprinting ${track.title}..."
+        val generation = tab.generation
         scope.launch {
-            fingerprint(track.file, track.title, markPath = track.file.absolutePath, tab = tab)
+            fingerprint(track.file, track.title, markPath = track.file.absolutePath, tab = tab, generation = generation)
         }
     }
 
@@ -2890,6 +2940,7 @@ class DesktopController(parent: CoroutineScope) {
     fun applyMatch(track: DesktopTrack, match: MusicMatch) {
         val tab = identifyTab()
         tab.busy = true
+        val generation = tab.generation
         scope.launch {
             if (writeTags) {
                 io {
@@ -2904,8 +2955,12 @@ class DesktopController(parent: CoroutineScope) {
             }
             coverOf(match)?.let { Covers.fetchAndStore(track, it, writeTags) }
             io { store.mark(track.file.absolutePath, "identifiedAt") }
-            tab.status = "Applied \"${match.display}\" to ${track.file.name}."
-            tab.busy = false
+            // The tags are written either way; only the word about it is
+            // dropped if the tab was left (and cleared) in the meantime.
+            if (tab.accepts(generation)) {
+                tab.status = "Applied \"${match.display}\" to ${track.file.name}."
+                tab.busy = false
+            }
             rescan()
         }
     }
