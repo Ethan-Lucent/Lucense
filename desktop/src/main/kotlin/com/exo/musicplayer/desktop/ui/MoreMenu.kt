@@ -5,7 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.runtime.Composable
@@ -18,6 +19,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -66,9 +68,12 @@ fun MoreMenu(label: String = "More", items: List<MoreItem>, iconOnly: Boolean = 
 
 /** The popup under the button; [close] is asked for on a pick, an outside click or Escape. */
 @Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 internal fun MoreItems(items: List<MoreItem>, close: () -> Unit) {
     val rows = items.indices.filter { items[it].enabled }
     var selected by remember { mutableStateOf(-1) }
+    // Read out here: inside the popup the window info may be the popup's own.
+    val window = LocalWindowInfo.current.containerSize
     Popup(
         popupPositionProvider = remember { UnderButton },
         onDismissRequest = close,
@@ -96,9 +101,11 @@ internal fun MoreItems(items: List<MoreItem>, close: () -> Unit) {
     ) {
         Column(
             Modifier
+                // Limits first, then the row-width: the other way round, IntrinsicSize pins the width and the minimum is lost.
+                .menuPanelSize(window)
                 .width(IntrinsicSize.Max)
-                .widthIn(min = MENU_MIN_WIDTH)
                 .floating(8.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(4.dp)
         ) {
             items.forEachIndexed { i, item ->
@@ -132,13 +139,13 @@ private object UnderButton : PopupPositionProvider {
         val x = if (anchorBounds.left + popupContentSize.width <= windowSize.width) {
             anchorBounds.left
         } else {
-            (anchorBounds.right - popupContentSize.width).coerceAtLeast(0)
+            (anchorBounds.right - popupContentSize.width).coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
         }
         val below = anchorBounds.bottom + 2
         val y = if (below + popupContentSize.height <= windowSize.height) {
             below
         } else {
-            (anchorBounds.top - 2 - popupContentSize.height).coerceAtLeast(0)
+            (anchorBounds.top - 2 - popupContentSize.height).coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
         }
         return IntOffset(x, y)
     }
