@@ -82,11 +82,11 @@ class SettingsLayerTest {
         ) + Destination.entries.map { page(it.label) } + page("Settings") +
             SettingsTab.entries.map { page("Settings: ${it.label}") }
         val empty = PaletteSearch.rank("", items).map { it.title }
-        assertTrue(empty.size <= 13, "${empty.size} rows")
+        assertTrue(empty.size <= 12, "${empty.size} rows")
         assertEquals(
             listOf(
                 "Play or pause", "Next song", "Previous song", "Shuffle off", "Library", "Playlists",
-                "Discover", "Identify", "Download", "Settings", PaletteSearch.TIP
+                "Discover", "Identify", "Download", "Settings"
             ),
             empty
         )
