@@ -34,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -98,7 +99,9 @@ internal fun NavigationRail(
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
+            RailSearch(compact) { controller.openPalette() }
+            Spacer(Modifier.height(8.dp))
             Destination.entries.forEach { entry ->
                 if (entry == Destination.DOWNLOAD) {
                     val downloads = controller.downloads
@@ -327,5 +330,48 @@ private fun RailDownloads(downloads: List<DownloadEntry>, onOpen: () -> Unit) {
                 modifier = Modifier.padding(start = 25.dp, top = 2.dp)
             )
         }
+    }
+}
+
+/**
+ * Ctrl+K for the mouse: shaped like a search box, and opens the palette. In a
+ * narrow window just its icon, with the key in its tooltip like the others.
+ */
+@Composable
+private fun RailSearch(compact: Boolean, onClick: () -> Unit) {
+    if (compact) {
+        RailItem("Search everything  Ctrl+K", Icons.Default.Search, selected = false, compact = true, onClick = onClick)
+        return
+    }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(if (Glass.on) 12.dp else 7.dp)
+    Row(
+        Modifier
+            .padding(horizontal = 10.dp)
+            .fillMaxWidth()
+            .then(
+                if (Glass.on) {
+                    Modifier.glassChip(shape, fill = if (hovered) 0.1f else 0.05f)
+                } else {
+                    Modifier.clip(shape).background(if (hovered) Palette.Hover else Palette.Content).border(1.dp, Palette.Line, shape)
+                }
+            )
+            .hoverable(interaction)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Search, null, Modifier.size(15.dp), tint = Palette.TextFaint)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "Search everything",
+            style = MaterialTheme.typography.bodySmall,
+            color = Palette.TextDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text("Ctrl+K", style = MaterialTheme.typography.labelSmall, color = Palette.TextFaint)
     }
 }

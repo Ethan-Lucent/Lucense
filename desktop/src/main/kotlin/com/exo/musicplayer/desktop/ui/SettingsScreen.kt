@@ -87,7 +87,8 @@ enum class SettingsTab(val label: String) {
  */
 @Composable
 fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
-    var tab by rememberSaveable { mutableStateOf(SettingsTab.LIBRARY) }
+    // On the controller, so the Ctrl+K palette can open Settings at a tab.
+    var tab by controller::settingsTab
     val tabs = rememberSaveableStateHolder()
     Column(Modifier.fillMaxSize()) {
         // Scrolls sideways when the pane is too narrow for seven tabs, rather

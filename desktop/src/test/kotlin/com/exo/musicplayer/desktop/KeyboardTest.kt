@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -11,6 +12,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
@@ -53,6 +57,15 @@ class KeyboardTest {
         override fun selectAllVisible() { calls += "selectAll" }
         override fun clearSelection(): Boolean { calls += "clearSelection"; return false }
         override fun closeGroupPage(): Boolean { calls += "closeGroupPage"; return false }
+        override fun openPalette(text: String?) { calls += "palette $text" }
+    }
+
+    /** A clipboard holding [text], so pasting never reads or changes the real one. */
+    private class FakeClipboard(var text: String) : ClipboardManager {
+        override fun getText(): AnnotatedString = AnnotatedString(text)
+        override fun setText(annotatedString: AnnotatedString) {
+            text = annotatedString.text
+        }
     }
 
     /** The window's keys as Main.kt hands them over, around [content]. */
@@ -205,5 +218,79 @@ class KeyboardTest {
         shown = false
         waitForIdle()
         assertFalse(Typing.active, "a box that has gone stops counting")
+    }
+
+    @Test
+    fun ctrlKOpensThePaletteFromAButtonAndFromATextBox() = runComposeUiTest {
+        val recorder = Recorder()
+        setContent {
+            AppWindow(WindowShortcuts(recorder)) {
+                Column {
+                    GhostButton("Elsewhere") {}
+                    TextInput("", {}, "Notes")
+                }
+            }
+        }
+        onNodeWithText("Elsewhere").performSemanticsAction(SemanticsActions.RequestFocus)
+        onNodeWithText("Elsewhere").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        val box = onAllNodes(hasSetTextAction())[0]
+        box.performSemanticsAction(SemanticsActions.RequestFocus)
+        box.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        assertEquals(listOf("palette null", "palette null"), recorder.calls)
+    }
+
+    @Test
+    fun theOtherWindowsHaveNoPalette() = runComposeUiTest {
+        val recorder = Recorder()
+        val shortcuts = WindowShortcuts(recorder, playbackOnly = true, clipboard = { "https://youtu.be/abc" })
+        setContent { AppWindow(shortcuts) { GhostButton("Play") {} } }
+        val button = onNodeWithText("Play")
+        button.performSemanticsAction(SemanticsActions.RequestFocus)
+        button.performKeyInput {
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.K) }
+            withKeyDown(Key.CtrlLeft) { pressKey(Key.V) }
+        }
+        assertEquals(emptyList(), recorder.calls)
+    }
+
+    @Test
+    fun ctrlVWithALinkOpensThePaletteWithIt() = runComposeUiTest {
+        val recorder = Recorder()
+        var clip = "  https://www.youtube.com/watch?v=abc \n"
+        var reads = 0
+        val shortcuts = WindowShortcuts(recorder, clipboard = { reads++; clip })
+        val clipboard = FakeClipboard(clip)
+        var typed by mutableStateOf("")
+        setContent {
+            CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                AppWindow(shortcuts) {
+                    Column {
+                        GhostButton("Elsewhere") {}
+                        TextInput(typed, { typed = it }, "Notes")
+                    }
+                }
+            }
+        }
+        val button = onNodeWithText("Elsewhere")
+        button.performSemanticsAction(SemanticsActions.RequestFocus)
+        button.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.V) } }
+        assertEquals(listOf("palette https://www.youtube.com/watch?v=abc"), recorder.calls)
+
+        // Words rather than a link: nothing happens.
+        clip = "just some words"
+        button.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.V) } }
+        assertEquals(1, recorder.calls.size)
+
+        // In a text box the paste is the box's, link or not.
+        clip = "https://example.com/x"
+        clipboard.text = clip
+        val readsBefore = reads
+        val box = onAllNodes(hasSetTextAction())[0]
+        box.performSemanticsAction(SemanticsActions.RequestFocus)
+        box.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.V) } }
+        waitForIdle()
+        assertEquals(1, recorder.calls.size, "the window left the box's paste alone")
+        assertEquals(readsBefore, reads, "the window didn't even look")
+        assertEquals("https://example.com/x", typed)
     }
 }

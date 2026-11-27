@@ -39,6 +39,8 @@ val KEY_GUIDE: List<KeyGroup> = listOf(
     KeyGroup(
         "Finding",
         listOf(
+            "Ctrl + K" to "Find anything: songs, albums, pages, actions and settings",
+            "Ctrl + V" to "Paste a link to download it, make a playlist from it or identify the song in it",
             "Ctrl + F" to "The page's search box, from anywhere",
             "J" to "Jump the list to the song playing",
             "/" to "This list"
