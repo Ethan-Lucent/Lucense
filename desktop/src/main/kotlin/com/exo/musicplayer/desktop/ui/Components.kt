@@ -67,6 +67,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -753,42 +754,18 @@ fun LineSlider(
                 val inset = SLIDER_INSET.toPx()
                 fun at(x: Float): Float =
                     ((x - inset) / (size.width - 2 * inset).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val buttons = currentEvent.buttons
-                    if (buttons.isSecondaryPressed && !buttons.isPrimaryPressed) return@awaitEachGesture
-                    down.consume()
-                    var last = at(down.position.x)
-                    dragging = last
-                    if (live) latestSet(last)
-                    var released = false
-                    try {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) {
-                                change.consume()
-                                released = true
-                                break
-                            }
-                            val next = at(change.position.x)
-                            if (next != last) {
-                                last = next
-                                dragging = next
-                                if (live) latestSet(next)
-                            }
-                            change.consume()
-                        }
-                    } finally {
-                        // A cancelled gesture sets nothing; only a real release
-                        // commits, and a click with no movement is a release too.
-                        if (released) {
-                            holding = last
-                            latestSet(last)
-                        }
-                        dragging = null
-                    }
-                }
+                followPress(
+                    at = ::at,
+                    onMove = {
+                        dragging = it
+                        if (live) latestSet(it)
+                    },
+                    onRelease = {
+                        holding = it
+                        latestSet(it)
+                    },
+                    onEnd = { dragging = null }
+                )
             }
             .pointerInput(enabled, wheelStep) {
                 if (!enabled || wheelStep <= 0f) return@pointerInput
@@ -824,6 +801,51 @@ fun LineSlider(
     }
 }
 
+/**
+ * One press, followed wherever the mouse goes until the button comes up, well
+ * off the control included: the seek bar's drag, and the rating stars'.
+ *
+ * [at] turns the pointer's x into the control's own value; [onMove] gets the
+ * value under the press and then each time it changes. A cancelled gesture
+ * sets nothing; only a real release reaches [onRelease], and a click with no
+ * movement is a release too. [onEnd] runs last either way. A press of the
+ * secondary button alone is left for the right-click menu.
+ */
+internal suspend fun PointerInputScope.followPress(
+    at: (Float) -> Float,
+    onMove: (Float) -> Unit,
+    onRelease: (Float) -> Unit,
+    onEnd: () -> Unit
+) = awaitEachGesture {
+    val down = awaitFirstDown(requireUnconsumed = false)
+    val buttons = currentEvent.buttons
+    if (buttons.isSecondaryPressed && !buttons.isPrimaryPressed) return@awaitEachGesture
+    down.consume()
+    var last = at(down.position.x)
+    onMove(last)
+    var released = false
+    try {
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) {
+                change.consume()
+                released = true
+                break
+            }
+            val next = at(change.position.x)
+            if (next != last) {
+                last = next
+                onMove(next)
+            }
+            change.consume()
+        }
+    } finally {
+        if (released) onRelease(last)
+        onEnd()
+    }
+}
+
 /** The largest the ball gets, and so how far the travel is kept from the edges. */
 private val SLIDER_INSET = 6.dp
 private val SLIDER_TRACK = 4.dp
@@ -833,5 +855,5 @@ private const val SLIDER_HOLD_MS = 900L
 
 /** A hover's fill, easing in and out rather than snapping. */
 @Composable
-private fun hoverFill(on: Boolean): Color =
+internal fun hoverFill(on: Boolean): Color =
     animateColorAsState(if (on) Palette.Hover else Color.Transparent, Motion.quick(), label = "hover").value

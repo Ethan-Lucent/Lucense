@@ -294,6 +294,13 @@ private fun AppearanceSettings(controller: DesktopController) {
             note = "The theme stays and its accent follows the artwork of what's playing. " +
                 "Black-and-white covers keep the theme's own."
         ) { controller.coverColours = it }
+        Spacer(Modifier.height(6.dp))
+        CheckRow(
+            "Show notes when hovering",
+            controller.hoverNotes,
+            note = "A short note on how to use a button or menu item when you rest the mouse on it. " +
+                "Buttons that are only an icon still show their name."
+        ) { controller.hoverNotes = it }
         Spacer(Modifier.height(12.dp))
         GhostButton("Edit colours", icon = Icons.Default.ColorLens) { editingColours = true }
         Spacer(Modifier.height(6.dp))

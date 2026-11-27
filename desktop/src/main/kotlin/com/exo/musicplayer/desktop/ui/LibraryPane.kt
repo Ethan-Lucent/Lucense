@@ -227,7 +227,7 @@ private fun revertItems(controller: DesktopController, track: DesktopTrack): Lis
         emptyList()
     } else {
         listOf(
-            ContextMenuItem("Revert to the file's own details") {
+            NotedMenuItem("Revert to the file's own details", Notes.REVERT) {
                 controller.revertToOriginal(listOf(track))
             }
         )
@@ -253,30 +253,26 @@ private fun TrackRow(
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
 
-    // Right-click gets the platform's own menu, which is what Windows users
-    // reach for and what a hand-drawn popup never quite matches.
+    // Right-click opens Lucense's own menu (LucenseContextMenu, provided at the
+    // root), which keeps the platform menu's habits - opens at the pointer,
+    // arrows and Enter - and can hold the rating as one slider.
     ContextMenuArea(
         items = {
             listOf(
                 ContextMenuItem("Play") { onPlay() },
-                ContextMenuItem("Play next") { controller.playNext(listOf(track)) },
-                ContextMenuItem("Add to queue") { controller.addToQueue(listOf(track)) },
+                NotedMenuItem("Play next", Notes.PLAY_NEXT) { controller.playNext(listOf(track)) },
+                NotedMenuItem("Add to queue", Notes.ADD_TO_QUEUE) { controller.addToQueue(listOf(track)) },
                 ContextMenuItem(
                     if (isFavourite) "Remove from favourites" else "Add to favourites"
                 ) { controller.toggleFavourite(track) },
-                ContextMenuItem("Add to playlist...") { onAddToPlaylist() },
-                ContextMenuItem("Edit details...") { controller.editTarget = track },
-                ContextMenuItem("Trim...") { controller.trimming = track },
-                ContextMenuItem("Identify this track") { onIdentify() },
-                ContextMenuItem("Rate ★★★★★") { controller.setRating(track, 5) },
-                ContextMenuItem("Rate ★★★★") { controller.setRating(track, 4) },
-                ContextMenuItem("Rate ★★★") { controller.setRating(track, 3) },
-                ContextMenuItem("Rate ★★") { controller.setRating(track, 2) },
-                ContextMenuItem("Rate ★") { controller.setRating(track, 1) },
-                ContextMenuItem("Clear rating") { controller.setRating(track, 0) },
+                NotedMenuItem("Add to playlist...", Notes.ADD_TO_PLAYLIST) { onAddToPlaylist() },
+                NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { controller.editTarget = track },
+                NotedMenuItem("Trim...", Notes.TRIM) { controller.trimming = track },
+                NotedMenuItem("Identify this track", Notes.IDENTIFY) { onIdentify() },
+                RatingMenuItem(controller.ratingOf(track)) { controller.setRating(track, it) },
                 ContextMenuItem(Platform.showInFolder) { revealInExplorer(track.file) }
             ) + revertItems(controller, track) + listOf(
-                ContextMenuItem("Delete (move to ${Platform.trashName})") {
+                NotedMenuItem("Delete (move to ${Platform.trashName})", Notes.DELETE) {
                     controller.deleteTracks(listOf(track))
                 }
             )

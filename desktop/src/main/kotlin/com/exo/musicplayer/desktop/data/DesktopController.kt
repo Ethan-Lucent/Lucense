@@ -3,6 +3,7 @@ package com.exo.musicplayer.desktop.data
 import com.exo.musicplayer.desktop.system.Platform
 import com.exo.musicplayer.desktop.system.Mpris
 import com.exo.musicplayer.desktop.ui.Glass
+import com.exo.musicplayer.desktop.ui.Notes
 import com.exo.musicplayer.desktop.download.YouTubeAhead
 import com.exo.musicplayer.desktop.download.YouTubeSignIn
 import com.exo.musicplayer.data.playlist.ParsedPlaylist
@@ -1120,9 +1121,22 @@ class DesktopController(parent: CoroutineScope) {
             settings.glassSeeThrough = Glass.seeThrough
         }
 
+    /**
+     * Whether resting the mouse on a menu item shows its note. [Notes.on] is
+     * already Compose state, so it is the mirror; this keeps it and the
+     * setting together, as [glass] does with [Glass.on].
+     */
+    var hoverNotes: Boolean
+        get() = Notes.on
+        set(value) {
+            Notes.on = value
+            settings.hoverNotes = value
+        }
+
     init {
         Glass.on = settings.glass
         Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)
+        Notes.on = settings.hoverNotes
     }
 
     // Colours from the cover, after Riff (github.com/rootscripts/riff, MIT).
