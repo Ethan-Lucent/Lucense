@@ -29,12 +29,14 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.MyLocation
@@ -491,6 +493,13 @@ private fun PaletteRow(item: PaletteItem, selected: Boolean, onHover: () -> Unit
 }
 
 /** Things to do, each wired to what its button or key already does, and the pages. */
+/** The palette's theme-mode row: what it says for [theme], or null when there is no other mode (Custom). */
+internal fun themeSwitchTitle(theme: AccentChoice): String? = when {
+    !theme.themeFamily.hasModes -> null
+    theme.light -> "Switch to dark theme"
+    else -> "Switch to light theme"
+}
+
 private fun paletteActions(
     controller: DesktopController,
     onGo: (Destination) -> Unit,
@@ -534,6 +543,17 @@ private fun paletteActions(
             onSettings(SettingsTab.ABOUT)
         }
     )
+    // The same family's other mode, as the Dark / Light row in Settings; Custom has none.
+    val theme = controller.accent
+    themeSwitchTitle(theme)?.let { title ->
+        val other = theme.variant(light = !theme.light)
+        list += PaletteItem(
+            a, title,
+            subtitle = other.label,
+            icon = if (theme.light) Icons.Default.DarkMode else Icons.Default.LightMode,
+            words = "theme mode dark light night day colours"
+        ) { controller.accent = other }
+    }
     // One step at a time; at either end the row stays and does nothing, as the same row in Settings would.
     list += PaletteItem(
         a, "Interface size: larger", subtitle = "Draw everything bigger, as far as the window allows",

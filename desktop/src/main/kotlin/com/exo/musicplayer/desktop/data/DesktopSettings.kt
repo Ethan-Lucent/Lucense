@@ -1,6 +1,7 @@
 package com.exo.musicplayer.desktop.data
 
 import com.exo.musicplayer.data.ProviderNotes
+import com.exo.musicplayer.desktop.ui.AccentChoice
 import java.io.File
 import java.util.prefs.Preferences
 
@@ -107,6 +108,11 @@ class DesktopSettings(
             hasLibrary = hasLibrary,
             save = { prefs.putBoolean(KEY_TIPS_SEEN, it) }
         )
+        resolveTheme(
+            stored = prefs.get(KEY_ACCENT, null),
+            hasLibrary = hasLibrary,
+            save = { prefs.put(KEY_ACCENT, it) }
+        )
     }
 
     var folders: List<String>
@@ -121,8 +127,9 @@ class DesktopSettings(
         get() = prefs.getFloat(KEY_VOLUME, 0.85f)
         set(value) = prefs.putFloat(KEY_VOLUME, value)
 
+    /** The theme's enum name; always stored by the time anything reads it - see [resolveTheme]. */
     var accentName: String
-        get() = prefs.get(KEY_ACCENT, "Amethyst")
+        get() = prefs.get(KEY_ACCENT, AccentChoice.DEFAULT.name)
         set(value) = prefs.put(KEY_ACCENT, value)
 
     var downloadDir: String
@@ -532,6 +539,21 @@ internal fun advancedDefault(hasLibrary: Boolean): Boolean = hasLibrary
  * library when this version first runs, who has no use for a welcome.
  */
 internal fun tipsSeenDefault(hasLibrary: Boolean): Boolean = hasLibrary
+
+/**
+ * The theme a first start settles on. Someone new gets Black. Someone who
+ * already has a library but never picked a theme has been looking at
+ * [shownToday] - what the old default name "Amethyst" fell back to - and keeps
+ * it, so an update does not repaint their window.
+ */
+internal fun themeDefault(hasLibrary: Boolean, shownToday: String): String =
+    if (hasLibrary) shownToday else AccentChoice.DEFAULT.name
+
+/** [resolveAdvanced] for the theme: a stored name is kept as it is; otherwise decided once and saved. */
+internal fun resolveTheme(stored: String?, hasLibrary: () -> Boolean, save: (String) -> Unit): String {
+    if (stored != null) return stored
+    return themeDefault(hasLibrary(), AccentChoice.SHOWN_FOR_UNKNOWN.name).also(save)
+}
 
 /** How far a wallpaper is darkened until the slider is moved. */
 internal const val WALLPAPER_DIM_DEFAULT = 0.55f
