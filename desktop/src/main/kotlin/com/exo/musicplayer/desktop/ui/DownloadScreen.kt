@@ -37,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -114,10 +115,19 @@ private fun anyToolMissing(tools: ToolStatus): Boolean =
  */
 @Composable
 fun DownloadScreen(controller: DesktopController, onChooseFolder: () -> File?) {
-    LaunchedEffect(Unit) { controller.refreshTools() }
+    // Every flag starts false until the first check lands, which would flash
+    // the Downloaders block on a perfectly good install. So a problem only
+    // counts once the check has had a moment (or an earlier visit already
+    // knew); a really broken install still shows it, two seconds late.
+    var toolsSettled by remember { mutableStateOf(controller.tools != ToolStatus()) }
+    LaunchedEffect(Unit) {
+        controller.refreshTools()
+        delay(2_000)
+        toolsSettled = true
+    }
     var showLog by remember { mutableStateOf(false) }
     var signInRevealed by remember { mutableStateOf(false) }
-    val showDownloaders = downloadersShown(anyToolMissing(controller.tools), Advanced.on)
+    val showDownloaders = downloadersShown(toolsSettled && anyToolMissing(controller.tools), Advanced.on)
     val showSignIn = youtubeBlockShown(
         refused = lastFailureRefused(controller.downloads),
         signedIn = controller.youtubeSignIn != YouTubeSignIn.Source.OFF || controller.signInKeptAt != null,
