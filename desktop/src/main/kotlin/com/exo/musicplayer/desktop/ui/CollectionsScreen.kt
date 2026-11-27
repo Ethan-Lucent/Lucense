@@ -408,7 +408,9 @@ private fun OpenGroup(
             openAlbum = { onOpenGroup(CollectionKind.ALBUMS, it) },
             back = { controller.openGroup(kind, null) },
             reorder = { controller.reorderAlbum(group, it) },
-            resetOrder = { controller.resetAlbumOrder(group) }
+            resetOrder = { controller.resetAlbumOrder(group) },
+            ratingOf = { controller.ratingOf(it) },
+            rate = { track, stars -> controller.setRating(track, stars) }
         )
     )
 }

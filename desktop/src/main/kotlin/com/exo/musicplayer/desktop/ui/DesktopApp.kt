@@ -4,6 +4,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.LocalContextMenuRepresentation
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.HazeState
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -164,7 +165,11 @@ fun DesktopApp(
         } else {
             Wallpaper(controller.wallpaper, controller.wallpaperDim, Modifier.matchParentSize())
         }
-        CompositionLocalProvider(LocalGlass provides glassState.takeIf { glass }) {
+        // Every right-click menu, text fields' included, is Lucense's own (LucenseMenu.kt).
+        CompositionLocalProvider(
+            LocalGlass provides glassState.takeIf { glass },
+            LocalContextMenuRepresentation provides LucenseContextMenu
+        ) {
         // The window's width in the steps the layout changes at, so resizing it
         // rebuilds nothing until one is crossed (see LocalWindowWidth).
         val density = LocalDensity.current

@@ -228,6 +228,11 @@ class DesktopSettings {
         get() = prefs.getBoolean(KEY_NOTIFY_SONGS, false)
         set(value) = prefs.putBoolean(KEY_NOTIFY_SONGS, value)
 
+    /** Whether resting the mouse on a menu item or a button shows a short note on it. */
+    var hoverNotes: Boolean
+        get() = prefs.getBoolean(KEY_HOVER_NOTES, true)
+        set(value) = prefs.putBoolean(KEY_HOVER_NOTES, value)
+
     /** Whether the song's own cover is shown on Discord rather than the app icon. */
     var discordCover: Boolean
         get() = prefs.getBoolean(KEY_DISCORD_COVER, true)
@@ -420,6 +425,7 @@ class DesktopSettings {
         const val KEY_LEVELLING = "levelling"
         const val KEY_DISCORD_COVER = "discord_cover"
         const val KEY_NOTIFY_SONGS = "notify_songs"
+        const val KEY_HOVER_NOTES = "hover_notes"
         const val KEY_CROSSFADE = "crossfade_ms"
         const val KEY_OUTPUT_RATE = "output_rate"
         const val KEY_LIBRARY_SORT = "library_sort"

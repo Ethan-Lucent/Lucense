@@ -125,7 +125,10 @@ class GroupActions(
     /** The album's songs dragged into a new order, to keep. */
     val reorder: (List<DesktopTrack>) -> Unit = {},
     /** Back to the album's own order, by track number. */
-    val resetOrder: () -> Unit = {}
+    val resetOrder: () -> Unit = {},
+    /** A song's stars, 0 for none, and giving it some (0 takes them away). */
+    val ratingOf: (DesktopTrack) -> Int = { 0 },
+    val rate: (DesktopTrack, Int) -> Unit = { _, _ -> }
 )
 
 /** What the page shows: read from the controller, or put together for a picture of it. */
@@ -683,13 +686,14 @@ private fun SongRow(
         items = {
             listOfNotNull(
                 ContextMenuItem(if (playingThis) "Pause" else "Play") { onPlay() },
-                ContextMenuItem("Play next") { actions.playNext(listOf(track)) },
-                ContextMenuItem("Add to queue") { actions.addToQueue(listOf(track)) },
+                NotedMenuItem("Play next", Notes.PLAY_NEXT) { actions.playNext(listOf(track)) },
+                NotedMenuItem("Add to queue", Notes.ADD_TO_QUEUE) { actions.addToQueue(listOf(track)) },
                 ContextMenuItem(if (favourite) "Remove from favourites" else "Add to favourites") {
                     actions.toggleFavourite(track)
                 },
-                ContextMenuItem("Add to playlist...") { actions.addToPlaylist(listOf(track)) },
-                ContextMenuItem("Edit details...") { actions.edit(track) },
+                NotedMenuItem("Add to playlist...", Notes.ADD_TO_PLAYLIST) { actions.addToPlaylist(listOf(track)) },
+                NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { actions.edit(track) },
+                RatingMenuItem(actions.ratingOf(track)) { actions.rate(track, it) },
                 album?.let { ContextMenuItem("Go to album") { actions.openAlbum(it.key) } },
                 ContextMenuItem(SHOW_IN_FOLDER) { actions.reveal(track.file) }
             )
