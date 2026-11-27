@@ -1,3 +1,5 @@
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
@@ -271,6 +273,64 @@ tasks.matching { it.name == "createDistributable" || it.name == "createReleaseDi
         if (!System.getProperty("os.name").lowercase().contains("linux")) return@doLast
         val resources = image.get().asFile.resolve("Lucense/lib/app/resources")
         linuxTools.map { resources.resolve(it) }.filter { it.isFile }.forEach { it.setExecutable(true, false) }
+
+        // A faster start: a class archive for the packaged runtime.
+        //
+        // jpackage's trimmed runtime has no class archive, so every launch loads and
+        // checks some ten thousand classes - Java's own, Compose's, Skiko's and ours -
+        // from the jars before the first window can open. Measured here: the window
+        // opens at 2.45 s without an archive and 1.65 s with one, whether the archive
+        // was made from an empty library or a full one, and from the folder it was
+        // made in or a copy moved elsewhere (an install under /opt).
+        //
+        // The runtime has no `java` to dump one with, so the app's own launcher does
+        // it, told what to do through JAVA_TOOL_OPTIONS: once to note which classes a
+        // run really loads, once to write them into the archive the runtime looks for
+        // by itself (lib/server/classes.jsa), so the launch needs no flag for it. It
+        // needs a display, because the first run is the real window; without one, or
+        // if anything goes wrong, the build carries on and the app starts as slowly as
+        // before. A mismatched archive (the jars changed) is skipped by the JVM, never
+        // an error, so a stale one costs speed and nothing else.
+        val app = image.get().asFile.resolve("Lucense")
+        val launcher = app.resolve("bin/Lucense")
+        val archive = app.resolve("lib/runtime/lib/server/classes.jsa")
+        if (!launcher.isFile) return@doLast
+        if (System.getenv("DISPLAY").isNullOrBlank()) {
+            logger.warn("No display, so no class archive: the app will start more slowly. Run under xvfb-run to make one.")
+            return@doLast
+        }
+        val scratch = Files.createTempDirectory("lucense-cds").toFile()
+        try {
+            fun launch(options: String): Process = ProcessBuilder(launcher.absolutePath)
+                .redirectErrorStream(true)
+                .redirectOutput(File(scratch, "output-${System.nanoTime()}.txt"))
+                .apply {
+                    // Its own data folder, so it is never the running Lucense and touches nobody's library.
+                    environment()["XDG_DATA_HOME"] = scratch.absolutePath
+                    environment()["JAVA_TOOL_OPTIONS"] = options
+                }
+                .start()
+            val classes = File(scratch, "classes.lst")
+            val training = launch("-XX:DumpLoadedClassList=${classes.absolutePath}")
+            // Long enough to open the window and settle; if it ends sooner it didn't work.
+            val endedEarly = training.waitFor(12, TimeUnit.SECONDS)
+            training.destroy()
+            if (!training.waitFor(15, TimeUnit.SECONDS)) training.destroyForcibly()
+            if (endedEarly || !classes.isFile || classes.length() == 0L) {
+                logger.warn("The training run didn't stay up, so no class archive: the app will start more slowly.")
+                return@doLast
+            }
+            val dump = launch(
+                "-Xshare:dump -XX:SharedClassListFile=${classes.absolutePath} -XX:SharedArchiveFile=${archive.absolutePath}"
+            )
+            if (!dump.waitFor(180, TimeUnit.SECONDS)) dump.destroyForcibly()
+            if (dump.exitValue() != 0 || !archive.isFile) {
+                archive.delete()
+                logger.warn("The class archive wasn't written, so the app will start more slowly.")
+            }
+        } finally {
+            scratch.deleteRecursively()
+        }
     }
 }
 listOf("", "Release").forEach { variant ->

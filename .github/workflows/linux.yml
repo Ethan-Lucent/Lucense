@@ -49,8 +49,10 @@ jobs:
           dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork
           xvfb-run -a bash -c 'openbox & sleep 2; gradle :desktop:test --console=plain'
 
+      # Under a display: making the app image opens the app once, to note which
+      # classes it loads, so that it starts faster for everyone after.
       - name: Packages
-        run: gradle :desktop:packageDeb :desktop:packageRpm :desktop:createDistributable --console=plain
+        run: xvfb-run -a gradle :desktop:packageDeb :desktop:packageRpm :desktop:createDistributable --console=plain
 
       - name: Portable archive
         run: |
