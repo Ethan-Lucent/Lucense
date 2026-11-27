@@ -389,6 +389,26 @@ fun DesktopApp(
             null -> Unit
         }
 
+        if (controller.paletteOpen) {
+            CommandPalette(
+                controller = controller,
+                onGo = {
+                    destination = it
+                    showSettings = false
+                },
+                onSettings = { tab ->
+                    tab?.let { controller.settingsTab = it }
+                    showSettings = true
+                },
+                onOpenGroup = openGroup,
+                onBulk = { dialog = DialogKind.BULK },
+                onDuplicates = {
+                    controller.findDuplicates()
+                    dialog = DialogKind.DUPLICATES
+                }
+            )
+        }
+
         if (controller.dropHover) {
             Box(
                 Modifier

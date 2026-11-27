@@ -4,6 +4,7 @@ import com.exo.musicplayer.desktop.system.Platform
 import com.exo.musicplayer.desktop.system.Mpris
 import com.exo.musicplayer.desktop.ui.Glass
 import com.exo.musicplayer.desktop.ui.Notes
+import com.exo.musicplayer.desktop.ui.SettingsTab
 import com.exo.musicplayer.desktop.download.YouTubeAhead
 import com.exo.musicplayer.desktop.download.YouTubeSignIn
 import com.exo.musicplayer.data.playlist.ParsedPlaylist
@@ -4472,6 +4473,24 @@ class DesktopController(parent: CoroutineScope) {
 
     /** Whether the list of keyboard shortcuts is on screen. */
     var showShortcuts by mutableStateOf(false)
+
+    /** Whether the Ctrl+K palette is open, and what is in its box when it opens - a pasted link, say. */
+    var paletteOpen by mutableStateOf(false)
+    var paletteText by mutableStateOf("")
+        private set
+
+    /** Ctrl+K: opens the palette, or closes it when open; [text] opens it with that already typed. */
+    fun openPalette(text: String? = null) {
+        if (text == null && paletteOpen) {
+            paletteOpen = false
+            return
+        }
+        paletteText = text.orEmpty()
+        paletteOpen = true
+    }
+
+    /** The Settings tab on show, kept here so the palette can open Settings at one. */
+    var settingsTab by mutableStateOf(SettingsTab.LIBRARY)
 
     // ---- Genres --------------------------------------------------------------------
 

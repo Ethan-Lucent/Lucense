@@ -335,6 +335,8 @@ file said before anything touched it.
   | M | mute, or put the volume back |
   | S · R | shuffle · repeat (all, one, off) |
   | L | loop: A here, then B here and round, then off |
+  | Ctrl + K | find anything: songs, albums, pages, actions and settings |
+  | Ctrl + V | paste a link to download it, make a playlist from it or identify the song in it |
   | Ctrl + F | the page's search box, from anywhere |
   | Ctrl + A · Esc | select everything in view · clear the selection, or back from an album's page; in a text box, Esc leaves it |
 

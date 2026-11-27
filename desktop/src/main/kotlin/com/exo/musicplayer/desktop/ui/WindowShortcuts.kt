@@ -9,6 +9,8 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import com.exo.musicplayer.desktop.data.DesktopController
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
 
 /**
  * The main window's keyboard shortcuts, in the two passes Compose offers.
@@ -31,13 +33,21 @@ import com.exo.musicplayer.desktop.data.DesktopController
  * alone - Ctrl+S is not "shuffle", and Ctrl+Space switches the keyboard layout
  * on many Linux desktops - apart from Ctrl+Left and Ctrl+Right (previous, next)
  * and Ctrl+Up and Ctrl+Down, which have always changed the volume too. Ctrl+F
- * goes to the page's search box, from anywhere, even another text box.
+ * goes to the page's search box, from anywhere, even another text box, and
+ * Ctrl+K opens the palette (CommandPalette) the same way. Ctrl+V outside a text
+ * box, with a link on the clipboard, opens the palette with the link in it;
+ * anything else on the clipboard is left alone, and in a box it is the box's.
  *
  * [playbackOnly] is for the other windows - the mini player, the lyrics - where
  * the playing keys work (space, arrows, M, S, R) but not the ones about the main
  * window's list and pages.
  */
-class WindowShortcuts(private val actions: Actions, private val playbackOnly: Boolean = false) {
+class WindowShortcuts(
+    private val actions: Actions,
+    private val playbackOnly: Boolean = false,
+    /** The clipboard's text; a parameter so the tests never touch the real one. */
+    private val clipboard: () -> String? = ::systemClipboardText
+) {
 
     /** What the keys do. The real one is [DesktopController.shortcutActions]. */
     interface Actions {
@@ -64,6 +74,9 @@ class WindowShortcuts(private val actions: Actions, private val playbackOnly: Bo
 
         /** A, then B and round, then off: see DesktopController.cycleAbLoop. */
         fun cycleAbLoop() = Unit
+
+        /** Ctrl+K, with no [text]: opens the palette, or closes it when open. With [text], opens it with that in it. */
+        fun openPalette(text: String? = null) = Unit
     }
 
     /**
@@ -76,6 +89,12 @@ class WindowShortcuts(private val actions: Actions, private val playbackOnly: Bo
         if (!playbackOnly && event.type == KeyEventType.KeyDown && event.isCtrlPressed && !event.isAltPressed &&
             event.key == Key.F && actions.focusSearch()
         ) {
+            return true
+        }
+        if (!playbackOnly && event.type == KeyEventType.KeyDown && event.isCtrlPressed && !event.isAltPressed &&
+            event.key == Key.K
+        ) {
+            actions.openPalette()
             return true
         }
         if (Typing.active) {
@@ -100,6 +119,11 @@ class WindowShortcuts(private val actions: Actions, private val playbackOnly: Bo
                 actions.selectAllVisible()
                 true
             }
+            down && event.isCtrlPressed && event.key == Key.V ->
+                PaletteLinks.urlOf(clipboard())?.let { link ->
+                    actions.openPalette(link)
+                    true
+                } ?: false
             down && event.key == Key.Escape -> actions.clearSelection()
             else -> false
         }
@@ -178,5 +202,15 @@ fun DesktopController.shortcutActions(): WindowShortcuts.Actions {
         override fun closeGroupPage(): Boolean = controller.closeGroupPage()
         override fun focusSearch(): Boolean = SearchBoxes.focus()
         override fun cycleAbLoop() = controller.cycleAbLoop()
+        override fun openPalette(text: String?) = controller.openPalette(text)
     }
+}
+
+/** The system clipboard's text, or null when it holds none or can't be read just now. */
+private fun systemClipboardText(): String? = try {
+    val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+    if (clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) clipboard.getData(DataFlavor.stringFlavor) as? String else null
+} catch (e: Exception) {
+    // Busy with another app, or no display: nothing to paste either way.
+    null
 }

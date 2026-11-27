@@ -41,7 +41,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,7 +86,8 @@ enum class SettingsTab(val label: String) {
  */
 @Composable
 fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
-    var tab by rememberSaveable { mutableStateOf(SettingsTab.LIBRARY) }
+    // On the controller, so the Ctrl+K palette can open Settings at a tab.
+    var tab by controller::settingsTab
     val tabs = rememberSaveableStateHolder()
     Column(Modifier.fillMaxSize()) {
         // Scrolls sideways when the pane is too narrow for seven tabs, rather
