@@ -88,9 +88,10 @@ object AppDirs {
 }
 
 /** Small key/value settings, in the Windows registry via java.util.prefs. */
-class DesktopSettings {
-
+class DesktopSettings(
+    // A parameter so a test can use a node of its own instead of the real one.
     private val prefs: Preferences = Preferences.userRoot().node("com/exo/musicplayer")
+) {
 
     init {
         // Decided here, before the controller opens the database, so a fresh
@@ -246,6 +247,11 @@ class DesktopSettings {
     var reactiveMode: String
         get() = prefs.get(KEY_REACTIVE_MODE, "BALL")
         set(value) = prefs.put(KEY_REACTIVE_MODE, value)
+
+    /** Whether the ball shows the playing song's cover, round, in its middle. */
+    var ballCover: Boolean
+        get() = prefs.getBoolean(KEY_BALL_COVER, false)
+        set(value) = prefs.putBoolean(KEY_BALL_COVER, value)
 
     /** The Discord application this shows up as; blank turns it off. */
     /** Whether a song starting shows as a desktop notification (Linux). */
@@ -469,6 +475,7 @@ class DesktopSettings {
         const val KEY_STARS = "starry_background"
         const val KEY_BACKDROP = "backdrop_style"
         const val KEY_REACTIVE_MODE = "reactive_mode"
+        const val KEY_BALL_COVER = "ball_cover"
         const val KEY_SHUFFLE = "shuffle"
         const val KEY_MEDIA_KEYS = "media_keys"
         const val KEY_LEVELLING = "levelling"

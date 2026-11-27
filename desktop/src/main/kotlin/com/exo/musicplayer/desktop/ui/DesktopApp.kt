@@ -223,6 +223,7 @@ fun DesktopApp(
                         graph = controller.songGraph,
                         beat = controller.engine.beat,
                         reactiveMode = controller.reactiveMode,
+                        ballCover = rememberBallCover(status.track, controller.ballCover),
                         modifier = Modifier.matchParentSize()
                     )
                     var paneWidth by remember { mutableStateOf(PANE_STEPS.last()) }

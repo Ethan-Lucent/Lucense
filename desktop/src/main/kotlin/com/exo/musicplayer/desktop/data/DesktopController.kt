@@ -1247,6 +1247,16 @@ class DesktopController(parent: CoroutineScope) {
             settings.reactiveMode = value.name
         }
 
+    private val ballCoverState = mutableStateOf(settings.ballCover)
+
+    /** Whether Reactive's ball has the playing song's cover in the middle. */
+    var ballCover: Boolean
+        get() = ballCoverState.value
+        set(value) {
+            ballCoverState.value = value
+            settings.ballCover = value
+        }
+
     /** Lyrics popped out into a window of their own. */
     var lyricsDetached by mutableStateOf(false)
 
