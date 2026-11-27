@@ -6,7 +6,13 @@ import androidx.compose.foundation.onClick
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -85,11 +91,15 @@ internal fun TransportBar(
     // A narrow window's bar: a shorter seek line and title.
     val width = LocalWindowWidth.current
     val narrow = width < 1000.dp
+    val showAb = barShows(BarControl.AB_LOOP, Advanced.on, loopStartMs != null)
+    // Shown when asked for, or when the sound is not going to the one default
+    // device - several at once, or another than the first - so it is never a mystery.
+    val outputInUse = controller.selectedOutputs.size > 1 ||
+        controller.selectedOutputs.firstOrNull() != controller.outputs.firstOrNull()?.name
     Column {
         if (!Glass.on) Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.Line))
-        Row(
+        BarSlots(
             Modifier
-                .fillMaxWidth()
                 .height(76.dp)
                 .then(
                     // A floating capsule of glass, as the controls are on Apple's.
@@ -100,234 +110,361 @@ internal fun TransportBar(
                     }
                 )
                 .padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // The song playing can be dragged out by its cover or its name.
-            // A click on the cover opens the lyrics fullscreen; a drag still takes the file out.
-            Noted(null, if (track != null) Notes.COVER else null) {
-                Artwork(
-                    track,
-                    46.dp,
-                    modifier = Modifier
-                        .then(
-                            if (track != null) {
-                                Modifier
-                                    .clip(RoundedCornerShape(5.dp))
-                                    .clickable { controller.lyricsFullscreen = true }
-                                    .pointerHoverIcon(PointerIcon.Hand)
-                            } else {
-                                Modifier
-                            }
-                        )
-                        .dragOutFiles { listOfNotNull(track?.file) }
-                )
-            }
-            Spacer(Modifier.width(13.dp))
-            Column(Modifier.width(if (narrow) 140.dp else 200.dp).dragOutFiles { listOfNotNull(track?.file) }) {
-                Text(
-                    track?.title ?: "Nothing playing",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Palette.Text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                // Each artist named goes to their page - when the song is one of the
-                // library's, so there is a page to go to.
+            centreWidth = centreWidth(narrow, showAb),
+            left = {
                 val inLibrary = remember(track, controller.tracks) {
                     track != null && controller.tracks.any { it.file == track.file }
                 }
-                Text(
-                    when {
+                BarNowPlaying(
+                    narrow = narrow,
+                    // The song playing can be dragged out by its cover or its name.
+                    // A click on the cover opens the lyrics fullscreen; a drag still takes the file out.
+                    cover = {
+                        Noted(null, if (track != null) Notes.COVER else null) {
+                            Artwork(
+                                track,
+                                46.dp,
+                                modifier = Modifier
+                                    .then(
+                                        if (track != null) {
+                                            Modifier
+                                                .clip(RoundedCornerShape(5.dp))
+                                                .clickable { controller.lyricsFullscreen = true }
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                                    .dragOutFiles { listOfNotNull(track?.file) }
+                            )
+                        }
+                    },
+                    title = track?.title ?: "Nothing playing",
+                    // Each artist named goes to their page - when the song is one of the
+                    // library's, so there is a page to go to.
+                    artist = when {
                         track == null -> AnnotatedString("—")
                         inLibrary -> artistLinks(track) { onOpenGroup(CollectionKind.ARTISTS, it) }
                         else -> AnnotatedString(track.displayArtist)
                     },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.TextDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    titleModifier = Modifier.dragOutFiles { listOfNotNull(track?.file) },
+                    favourite = track?.let { it.file.absolutePath in controller.favourites },
+                    onFavourite = { track?.let { controller.toggleFavourite(it) } }
                 )
-            }
-            if (track != null) {
-                Spacer(Modifier.width(6.dp))
-                val favourite = track.file.absolutePath in controller.favourites
-                Noted("Favourite", Notes.FAVOURITE, iconOnly = true) {
-                    IconButton(onClick = { controller.toggleFavourite(track) }) {
-                        Icon(
-                            if (favourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            "Favourite",
-                            Modifier.size(16.dp),
-                            tint = if (favourite) Palette.Accent else Palette.TextDim
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Noted("Shuffle", Notes.SHUFFLE, iconOnly = true) {
-                        IconButton(onClick = { controller.shuffle = !controller.shuffle }) {
-                            Icon(
-                                Icons.Default.Shuffle,
-                                if (controller.shuffle) "Shuffle on" else "Shuffle off",
-                                Modifier.size(17.dp),
-                                tint = if (controller.shuffle) Palette.Accent else Palette.TextDim
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(2.dp))
-                    IconButton(onClick = { controller.previous() }) {
-                        Icon(
-                            Icons.Default.SkipPrevious, "Previous",
-                            Modifier.size(20.dp), tint = Palette.TextDim
-                        )
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    Box(
-                        Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Palette.Accent)
-                            .clickable { controller.togglePlay() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Crossfade(isPlaying, animationSpec = Motion.quick(), label = "play") { playing ->
-                            Icon(
-                                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                if (playing) "Pause" else "Play",
-                                Modifier.size(18.dp),
-                                tint = Palette.OnAccent
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    IconButton(onClick = { controller.next() }) {
-                        Icon(
-                            Icons.Default.SkipNext, "Next",
-                            Modifier.size(20.dp), tint = Palette.TextDim
-                        )
-                    }
-                    Spacer(Modifier.width(2.dp))
-                    Noted("Repeat", Notes.REPEAT, iconOnly = true) {
-                        IconButton(onClick = { controller.cycleRepeat() }) {
-                            Icon(
-                                if (controller.repeat == RepeatMode.ONE) {
-                                    Icons.Default.RepeatOne
-                                } else {
-                                    Icons.Default.Repeat
-                                },
-                                controller.repeat.label,
-                                Modifier.size(17.dp),
-                                tint = if (controller.repeat == RepeatMode.OFF) Palette.TextDim else Palette.Accent
-                            )
-                        }
-                    }
-                    // Out of sight until asked for or in use; the L key works either way.
-                    if (barShows(BarControl.AB_LOOP, Advanced.on, loopStartMs != null)) {
-                        AbLoopButton(
+            },
+            centre = {
+                BarCentre(
+                    centreWidth(narrow, showAb),
+                    buttons = {
+                        TransportButtons(
+                            shuffle = controller.shuffle,
+                            repeat = controller.repeat,
+                            isPlaying = isPlaying,
+                            showAb = showAb,
                             loopStartMs = loopStartMs,
                             loopEndMs = loopEndMs,
-                            enabled = track != null,
-                            onClick = { controller.cycleAbLoop() }
+                            abEnabled = track != null,
+                            onShuffle = { controller.shuffle = !controller.shuffle },
+                            onPrevious = { controller.previous() },
+                            onPlay = { controller.togglePlay() },
+                            onNext = { controller.next() },
+                            onRepeat = { controller.cycleRepeat() },
+                            onAb = { controller.cycleAbLoop() }
                         )
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                SeekRow(controller, track, durationMs, narrow, loopStartMs, loopEndMs)
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            BarToggle(
-                icon = Icons.AutoMirrored.Filled.QueueMusic,
-                label = "Queue",
-                active = panel == SidePanelKind.QUEUE,
-                highlight = false,
-                note = Notes.QUEUE
-            ) { controller.togglePanel(SidePanelKind.QUEUE) }
-            BarToggle(
-                icon = Icons.Default.Lyrics,
-                label = "Lyrics",
-                active = panel == SidePanelKind.LYRICS,
-                highlight = controller.lyricsPlain != null,
-                note = Notes.LYRICS
-            ) { controller.togglePanel(SidePanelKind.LYRICS) }
-            BarToggle(
-                icon = Icons.Default.GraphicEq,
-                label = "Effects",
-                active = panel == SidePanelKind.EFFECTS,
-                highlight = !controller.fx.isDefault,
-                note = Notes.EFFECTS
-            ) { controller.togglePanel(SidePanelKind.EFFECTS) }
-            // Shown when asked for, or when the sound is not going to the one default
-            // device - several at once, or another than the first - so it is never a mystery.
-            val outputInUse = controller.selectedOutputs.size > 1 ||
-                controller.selectedOutputs.firstOrNull() != controller.outputs.firstOrNull()?.name
-            if (barShows(BarControl.OUTPUT, Advanced.on, outputInUse || panel == SidePanelKind.OUTPUT)) {
-                BarToggle(
-                    icon = Icons.Default.Speaker,
-                    label = "Output",
-                    active = panel == SidePanelKind.OUTPUT,
-                    highlight = controller.selectedOutputs.size > 1,
-                    note = Notes.OUTPUT
-                ) { controller.togglePanel(SidePanelKind.OUTPUT) }
-            }
-
-            Spacer(Modifier.width(6.dp))
-            // Ducking happens while another window has focus, so there has to
-            // be something to look at afterwards that says it worked.
-            // The minus sits beside the speaker rather than replacing it. The
-            // speaker is busy saying how loud the music is, and one glyph
-            // cannot carry that and "ducked" at the same time without losing
-            // one of them. A fixed width keeps the slider still either way.
-            Text(
-                if (controller.ducked) "−" else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = Palette.Accent,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.width(9.dp)
-            )
-            // Clicking the speaker mutes, and clicking it again puts back the
-            // level it was at - which is what a speaker next to a volume line
-            // is expected to do.
-            Box(
-                Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .clickable { controller.toggleMute() }
-                    .pointerHoverIcon(PointerIcon.Hand),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    volumeIcon(controller.volume),
-                    when {
-                        controller.ducked -> "Ducked for gaming"
-                        controller.volume <= 0.001f -> "Unmute"
-                        else -> "Mute"
                     },
-                    Modifier.size(16.dp),
-                    tint = if (controller.ducked) Palette.Accent else Palette.TextDim
+                    seek = { SeekRow(controller, track, durationMs, loopStartMs, loopEndMs) }
+                )
+            },
+            right = {
+                BarRight(
+                    narrow = narrow,
+                    panel = panel,
+                    lyricsHighlight = controller.lyricsPlain != null,
+                    effectsHighlight = !controller.fx.isDefault,
+                    showOutput = barShows(BarControl.OUTPUT, Advanced.on, outputInUse || panel == SidePanelKind.OUTPUT),
+                    outputHighlight = controller.selectedOutputs.size > 1,
+                    ducked = controller.ducked,
+                    volume = controller.volume,
+                    onPanel = { controller.togglePanel(it) },
+                    onVolume = { controller.volume = it },
+                    onMute = { controller.toggleMute() },
+                    more = { SleepAndMore(controller) }
                 )
             }
-            // The same line as the seek bar, so the two read as one family
-            // rather than one of them being a different kind of control. It
-            // follows the drag live, since setting a volume costs nothing, and
-            // takes the mouse wheel a notch at a time.
-            LineSlider(
-                value = controller.volume,
-                onSet = { controller.volume = it },
-                live = true,
-                wheelStep = 0.05f,
-                restColor = Palette.TextDim,
-                activeColor = Palette.Accent,
-                modifier = Modifier.width(if (narrow) 72.dp else 96.dp)
+        )
+    }
+}
+
+/** The middle slot's width: as wide as the seek line wants, and never narrower than the buttons need. */
+internal fun centreWidth(narrow: Boolean, showAb: Boolean): Dp =
+    maxOf(if (narrow) 284.dp else 380.dp, BUTTONS_NATURAL + if (showAb) 48.dp else 0.dp)
+
+/** shuffle, previous, play, next, repeat side by side with no spare room: 4 round buttons of 48 and the 34 play disc. */
+private val BUTTONS_NATURAL = 48.dp * 4 + 34.dp
+
+/**
+ * The bar as three slots. The middle one takes its own width first and the two
+ * outer ones share what is left equally, so the middle is exactly in the middle
+ * of the bar whatever the sides hold. (Two spacers around it only split what the
+ * sides left over, which centred it between them, not in the window.) A side
+ * too full for its half gives way inside its slot - [BarNowPlaying]'s title
+ * shortens, the volume line shrinks - and is clipped as a last resort, so the
+ * middle never moves or gets overlapped.
+ */
+@Composable
+internal fun BarSlots(
+    modifier: Modifier,
+    centreWidth: Dp,
+    left: @Composable RowScope.() -> Unit,
+    centre: @Composable () -> Unit,
+    right: @Composable RowScope.() -> Unit
+) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.weight(1f).fillMaxHeight().clipToBounds().testTag("bar-left"),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically,
+            content = left
+        )
+        // A little air each side so a full slot never touches the buttons; equal both sides.
+        Box(Modifier.padding(horizontal = 12.dp).width(centreWidth).testTag("bar-centre")) { centre() }
+        Row(
+            Modifier.weight(1f).fillMaxHeight().clipToBounds().testTag("bar-right"),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+            content = right
+        )
+    }
+}
+
+/** Cover, title and artist, and the heart: the left slot. The title gives way first when the slot is short. */
+@Composable
+internal fun RowScope.BarNowPlaying(
+    narrow: Boolean,
+    cover: @Composable () -> Unit,
+    title: String,
+    artist: AnnotatedString,
+    titleModifier: Modifier,
+    /** Null when nothing is playing (no heart); otherwise whether it is a favourite. */
+    favourite: Boolean?,
+    onFavourite: () -> Unit
+) {
+    cover()
+    Spacer(Modifier.width(13.dp))
+    // 200 (140 narrow) when there is room, shrinking - not pushing the middle - when there is
+    // not. The weight alone would hand it all the slot's spare room, so the width is set
+    // on the column inside and the box around it only ever offers up to what is left.
+    Box(Modifier.weight(1f, fill = false)) {
+        Column(Modifier.width(if (narrow) 140.dp else 200.dp).then(titleModifier)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Palette.Text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            Spacer(Modifier.width(6.dp))
-            SleepAndMore(controller)
+            Text(
+                artist,
+                style = MaterialTheme.typography.bodySmall,
+                color = Palette.TextDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
+    if (favourite != null) {
+        Spacer(Modifier.width(6.dp))
+        Noted("Favourite", Notes.FAVOURITE, iconOnly = true) {
+            IconButton(onClick = onFavourite) {
+                Icon(
+                    if (favourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    "Favourite",
+                    Modifier.size(16.dp),
+                    tint = if (favourite) Palette.Accent else Palette.TextDim
+                )
+            }
+        }
+    }
+}
+
+/** The middle slot: the buttons spread over the full width, the seek line under them, the same width. */
+@Composable
+internal fun BarCentre(width: Dp, buttons: @Composable RowScope.() -> Unit, seek: @Composable () -> Unit) {
+    Column(Modifier.width(width), horizontalAlignment = Alignment.CenterHorizontally) {
+        // Spread evenly so the outer buttons sit over the ends of the seek line.
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+            content = buttons
+        )
+        Spacer(Modifier.height(4.dp))
+        seek()
+    }
+}
+
+@Composable
+internal fun RowScope.TransportButtons(
+    shuffle: Boolean,
+    repeat: RepeatMode,
+    isPlaying: Boolean,
+    showAb: Boolean,
+    loopStartMs: Long?,
+    loopEndMs: Long?,
+    abEnabled: Boolean,
+    onShuffle: () -> Unit,
+    onPrevious: () -> Unit,
+    onPlay: () -> Unit,
+    onNext: () -> Unit,
+    onRepeat: () -> Unit,
+    onAb: () -> Unit
+) {
+    Noted("Shuffle", Notes.SHUFFLE, iconOnly = true) {
+        IconButton(onClick = onShuffle) {
+            Icon(
+                Icons.Default.Shuffle,
+                if (shuffle) "Shuffle on" else "Shuffle off",
+                Modifier.size(17.dp),
+                tint = if (shuffle) Palette.Accent else Palette.TextDim
+            )
+        }
+    }
+    IconButton(onClick = onPrevious) {
+        Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(20.dp), tint = Palette.TextDim)
+    }
+    Box(
+        Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(Palette.Accent)
+            .clickable(onClick = onPlay),
+        contentAlignment = Alignment.Center
+    ) {
+        Crossfade(isPlaying, animationSpec = Motion.quick(), label = "play") { playing ->
+            Icon(
+                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                if (playing) "Pause" else "Play",
+                Modifier.size(18.dp),
+                tint = Palette.OnAccent
+            )
+        }
+    }
+    IconButton(onClick = onNext) {
+        Icon(Icons.Default.SkipNext, "Next", Modifier.size(20.dp), tint = Palette.TextDim)
+    }
+    Noted("Repeat", Notes.REPEAT, iconOnly = true) {
+        IconButton(onClick = onRepeat) {
+            Icon(
+                if (repeat == RepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                repeat.label,
+                Modifier.size(17.dp),
+                tint = if (repeat == RepeatMode.OFF) Palette.TextDim else Palette.Accent
+            )
+        }
+    }
+    // Out of sight until asked for or in use; the L key works either way.
+    if (showAb) AbLoopButton(loopStartMs = loopStartMs, loopEndMs = loopEndMs, enabled = abEnabled, onClick = onAb)
+}
+
+/** The right slot: the panel toggles, the volume, More. Its volume line is what shrinks when the slot is short. */
+@Composable
+internal fun RowScope.BarRight(
+    narrow: Boolean,
+    panel: SidePanelKind?,
+    lyricsHighlight: Boolean,
+    effectsHighlight: Boolean,
+    showOutput: Boolean,
+    outputHighlight: Boolean,
+    ducked: Boolean,
+    volume: Float,
+    onPanel: (SidePanelKind) -> Unit,
+    onVolume: (Float) -> Unit,
+    onMute: () -> Unit,
+    more: @Composable () -> Unit
+) {
+    BarToggle(
+        icon = Icons.AutoMirrored.Filled.QueueMusic,
+        label = "Queue",
+        active = panel == SidePanelKind.QUEUE,
+        highlight = false,
+        note = Notes.QUEUE
+    ) { onPanel(SidePanelKind.QUEUE) }
+    BarToggle(
+        icon = Icons.Default.Lyrics,
+        label = "Lyrics",
+        active = panel == SidePanelKind.LYRICS,
+        highlight = lyricsHighlight,
+        note = Notes.LYRICS
+    ) { onPanel(SidePanelKind.LYRICS) }
+    BarToggle(
+        icon = Icons.Default.GraphicEq,
+        label = "Effects",
+        active = panel == SidePanelKind.EFFECTS,
+        highlight = effectsHighlight,
+        note = Notes.EFFECTS
+    ) { onPanel(SidePanelKind.EFFECTS) }
+    if (showOutput) {
+        BarToggle(
+            icon = Icons.Default.Speaker,
+            label = "Output",
+            active = panel == SidePanelKind.OUTPUT,
+            highlight = outputHighlight,
+            note = Notes.OUTPUT
+        ) { onPanel(SidePanelKind.OUTPUT) }
+    }
+
+    Spacer(Modifier.width(6.dp))
+    // Ducking happens while another window has focus, so there has to
+    // be something to look at afterwards that says it worked.
+    // The minus sits beside the speaker rather than replacing it. The
+    // speaker is busy saying how loud the music is, and one glyph
+    // cannot carry that and "ducked" at the same time without losing
+    // one of them. A fixed width keeps the slider still either way.
+    Text(
+        if (ducked) "−" else "",
+        style = MaterialTheme.typography.labelSmall,
+        color = Palette.Accent,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.width(9.dp)
+    )
+    // Clicking the speaker mutes, and clicking it again puts back the
+    // level it was at - which is what a speaker next to a volume line
+    // is expected to do.
+    Box(
+        Modifier
+            .size(26.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onMute)
+            .pointerHoverIcon(PointerIcon.Hand),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            volumeIcon(volume),
+            when {
+                ducked -> "Ducked for gaming"
+                volume <= 0.001f -> "Unmute"
+                else -> "Mute"
+            },
+            Modifier.size(16.dp),
+            tint = if (ducked) Palette.Accent else Palette.TextDim
+        )
+    }
+    // The same line as the seek bar, so the two read as one family
+    // rather than one of them being a different kind of control. It
+    // follows the drag live, since setting a volume costs nothing, and
+    // takes the mouse wheel a notch at a time.
+    LineSlider(
+        value = volume,
+        onSet = onVolume,
+        live = true,
+        wheelStep = 0.05f,
+        restColor = Palette.TextDim,
+        activeColor = Palette.Accent,
+        // Its full width when there is room; a short slot shrinks it rather than the buttons.
+        modifier = Modifier.weight(1f, fill = false).width(if (narrow) 72.dp else 96.dp)
+    )
+    Spacer(Modifier.width(6.dp))
+    more()
 }
 
 /** The bar's controls that are not there for everyone; see [barShows]. */
@@ -507,16 +644,32 @@ private fun SeekRow(
     controller: DesktopController,
     track: DesktopTrack?,
     durationMs: Long,
-    narrow: Boolean,
     loopStartMs: Long?,
     loopEndMs: Long?
 ) {
     val positionMs by controller.engine.collectPositionMs()
+    SeekLine(positionMs, durationMs, track != null, loopStartMs, loopEndMs) { controller.seekFraction(it) }
+}
+
+/**
+ * The line and its clocks, as wide as the slot it is in: the clocks take their
+ * fixed width at each end and the line the rest, so the row's ends are the
+ * buttons' ends above it.
+ */
+@Composable
+internal fun SeekLine(
+    positionMs: Long,
+    durationMs: Long,
+    enabled: Boolean,
+    loopStartMs: Long?,
+    loopEndMs: Long?,
+    onSeek: (Float) -> Unit
+) {
     // Where the drag currently is, or null when nobody is dragging.
     // The clock on the left follows this while it is set, so the
     // number and the bar say the same thing mid-drag.
     var scrubbing by remember { mutableStateOf<Float?>(null) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             (scrubbing?.let { (it * durationMs).toLong() } ?: positionMs).asDuration(),
             style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
@@ -525,16 +678,16 @@ private fun SeekRow(
             modifier = Modifier.width(38.dp)
         )
         Spacer(Modifier.width(4.dp))
-        Box(Modifier.width(if (narrow) 200.dp else 330.dp)) {
+        Box(Modifier.weight(1f)) {
             LineSlider(
                 value = if (durationMs > 0) {
                     (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
                 } else {
                     0f
                 },
-                enabled = track != null,
+                enabled = enabled,
                 onPreview = { scrubbing = it },
-                onSet = { controller.seekFraction(it) },
+                onSet = onSeek,
                 modifier = Modifier.fillMaxWidth()
             )
             LoopMarks(loopStartMs, loopEndMs, durationMs, Modifier.matchParentSize())
