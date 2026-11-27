@@ -95,10 +95,16 @@ class DesktopSettings {
     init {
         // Decided here, before the controller opens the database, so a fresh
         // install does not see the empty file it is about to create as a library.
+        val hasLibrary = { folders.isNotEmpty() || AppDirs.database.exists() }
         resolveAdvanced(
             stored = prefs.get(KEY_ADVANCED_MODE, null),
-            hasLibrary = { folders.isNotEmpty() || AppDirs.database.exists() },
+            hasLibrary = hasLibrary,
             save = { prefs.putBoolean(KEY_ADVANCED_MODE, it) }
+        )
+        resolveTipsSeen(
+            stored = prefs.get(KEY_TIPS_SEEN, null),
+            hasLibrary = hasLibrary,
+            save = { prefs.putBoolean(KEY_TIPS_SEEN, it) }
         )
     }
 
@@ -250,6 +256,16 @@ class DesktopSettings {
     var advancedMode: Boolean
         get() = prefs.getBoolean(KEY_ADVANCED_MODE, false)
         set(value) = prefs.putBoolean(KEY_ADVANCED_MODE, value)
+
+    /** Whether the one-time tip at the top of the Library has been dismissed; see [resolveTipsSeen]. */
+    var tipsSeen: Boolean
+        get() = prefs.getBoolean(KEY_TIPS_SEEN, true)
+        set(value) = prefs.putBoolean(KEY_TIPS_SEEN, value)
+
+    /** How big everything is drawn, 1 being the normal size; see [UI_SCALES]. */
+    var uiScale: Float
+        get() = prefs.getFloat(KEY_UI_SCALE, 1f)
+        set(value) = prefs.putFloat(KEY_UI_SCALE, value)
 
     /** Whether the sidebar's More group is left unfolded. */
     var railMoreOpen: Boolean
@@ -451,6 +467,8 @@ class DesktopSettings {
         const val KEY_HOVER_NOTES = "hover_notes"
         const val KEY_ADVANCED_MODE = "advanced_mode"
         const val KEY_RAIL_MORE = "rail_more_open"
+        const val KEY_TIPS_SEEN = "tips_seen"
+        const val KEY_UI_SCALE = "ui_scale"
         const val KEY_CROSSFADE = "crossfade_ms"
         const val KEY_OUTPUT_RATE = "output_rate"
         const val KEY_LIBRARY_SORT = "library_sort"
@@ -492,6 +510,12 @@ class DesktopSettings {
  */
 internal fun advancedDefault(hasLibrary: Boolean): Boolean = hasLibrary
 
+/**
+ * Whether the first-run tip counts as already seen: yes for anyone who has a
+ * library when this version first runs, who has no use for a welcome.
+ */
+internal fun tipsSeenDefault(hasLibrary: Boolean): Boolean = hasLibrary
+
 /** How far a wallpaper is darkened until the slider is moved. */
 internal const val WALLPAPER_DIM_DEFAULT = 0.55f
 
@@ -504,4 +528,10 @@ internal const val WALLPAPER_DIM_DEFAULT = 0.55f
 internal fun resolveAdvanced(stored: String?, hasLibrary: () -> Boolean, save: (Boolean) -> Unit): Boolean {
     if (stored != null) return stored.toBoolean()
     return advancedDefault(hasLibrary()).also(save)
+}
+
+/** [resolveAdvanced] for the tip: decided the first time only, and saved on the spot for the same reason. */
+internal fun resolveTipsSeen(stored: String?, hasLibrary: () -> Boolean, save: (Boolean) -> Unit): Boolean {
+    if (stored != null) return stored.toBoolean()
+    return tipsSeenDefault(hasLibrary()).also(save)
 }

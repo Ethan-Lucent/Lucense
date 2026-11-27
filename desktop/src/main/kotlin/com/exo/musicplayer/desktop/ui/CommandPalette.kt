@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -500,6 +502,15 @@ private fun paletteActions(
             onSettings(SettingsTab.ABOUT)
         }
     )
+    // One step at a time; at either end the row stays and does nothing, as the same row in Settings would.
+    list += PaletteItem(
+        a, "Interface size: larger", subtitle = "Draw everything bigger, as far as the window allows",
+        icon = Icons.Default.ZoomIn, words = "zoom scale bigger text size"
+    ) { controller.uiScale = stepUiScale(controller.uiScale, 1) }
+    list += PaletteItem(
+        a, "Interface size: smaller", subtitle = "Draw everything smaller",
+        icon = Icons.Default.ZoomOut, words = "zoom scale smaller text size"
+    ) { controller.uiScale = stepUiScale(controller.uiScale, -1) }
     listOf(15, 30, 45, 60, 90).forEach { minutes ->
         list += PaletteItem(a, "Sleep in $minutes minutes", "Then pause", Icons.Default.Bedtime, words = "sleep timer") {
             controller.setSleepTimer(minutes)

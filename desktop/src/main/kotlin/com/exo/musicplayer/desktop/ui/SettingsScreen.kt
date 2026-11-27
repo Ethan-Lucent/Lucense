@@ -129,6 +129,7 @@ internal val settingsIndex: List<SettingEntry> = buildList {
         add(SettingEntry("Game ducking", "turn the music down with a hotkey while gaming", playback, true) { it.duckEnabled })
     }
     add(SettingEntry("Accent colour", "theme colours, swatches, dark light", look))
+    add(SettingEntry("Interface size", "zoom, scale, bigger text, smaller", look))
     add(SettingEntry("Liquid glass", "frosted panes, transparency", look))
     add(SettingEntry("Glass see-through", "how much of the background shows through the glass", look, true) {
         it.glassSeeThrough != Glass.SEE_THROUGH_DEFAULT
@@ -428,6 +429,17 @@ private fun AppearanceSettings(controller: DesktopController) {
         }
         Spacer(Modifier.height(8.dp))
         Hint(controller.accent.credit)
+        Spacer(Modifier.height(10.dp))
+        Text("Interface size", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            UI_SCALES.forEach { (name, factor) ->
+                Chip("$name ${(factor * 100).roundToInt()}%", selected = controller.uiScale == factor) {
+                    controller.uiScale = factor
+                }
+            }
+        }
+        Hint("Makes everything bigger or smaller. The window still fits itself to its size.")
         Spacer(Modifier.height(10.dp))
         CheckRow(
             "Liquid glass",

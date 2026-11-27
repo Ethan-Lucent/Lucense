@@ -159,18 +159,19 @@ internal fun NavigationRail(
                                 selected = entry == current,
                                 badge = downloads.count { !it.done },
                                 shine = controller.unseenFinishedDownloads > 0,
-                                compact = compact
+                                compact = compact,
+                                note = railNote(entry)
                             ) { onSelect(entry) }
                             if (!compact) RailDownloads(downloads) { onSelect(Destination.DOWNLOAD) }
                         } else {
-                            RailItem(entry.label, entry.icon, entry == current, compact = compact) { onSelect(entry) }
+                            RailItem(entry.label, entry.icon, entry == current, compact = compact, note = railNote(entry)) { onSelect(entry) }
                         }
                     }
                 }
             }
 
             }
-            RailItem("Settings", Icons.Default.Settings, settingsOpen, compact = compact, onClick = onSettings)
+            RailItem("Settings", Icons.Default.Settings, settingsOpen, compact = compact, note = Notes.RAIL_SETTINGS, onClick = onSettings)
             Spacer(Modifier.height(10.dp))
         }
     }
@@ -213,6 +214,19 @@ private fun RailFold(text: String, open: Boolean, onToggle: () -> Unit) {
         Spacer(Modifier.width(4.dp))
         Text(text, style = MaterialTheme.typography.labelSmall, color = Palette.TextFaint)
     }
+}
+
+/** The line the hover note gives for each page in the sidebar (Settings has its own, [Notes.RAIL_SETTINGS]). */
+internal fun railNote(page: Destination): String = when (page) {
+    Destination.LIBRARY -> Notes.RAIL_LIBRARY
+    Destination.ALBUMS -> Notes.RAIL_ALBUMS
+    Destination.ARTISTS -> Notes.RAIL_ARTISTS
+    Destination.PLAYLISTS -> Notes.RAIL_PLAYLISTS
+    Destination.DISCOVER -> Notes.RAIL_DISCOVER
+    Destination.IDENTIFY -> Notes.RAIL_IDENTIFY
+    Destination.DOWNLOAD -> Notes.RAIL_DOWNLOAD
+    Destination.MOODS -> Notes.RAIL_MOODS
+    Destination.STATS -> Notes.RAIL_STATS
 }
 
 @Composable

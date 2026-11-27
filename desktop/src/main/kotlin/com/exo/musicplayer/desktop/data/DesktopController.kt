@@ -5,6 +5,8 @@ import com.exo.musicplayer.desktop.system.Mpris
 import com.exo.musicplayer.desktop.ui.Glass
 import com.exo.musicplayer.desktop.ui.Advanced
 import com.exo.musicplayer.desktop.ui.Notes
+import com.exo.musicplayer.desktop.ui.UI_SCALES
+import com.exo.musicplayer.desktop.ui.UiScale
 import com.exo.musicplayer.desktop.ui.SettingsTab
 import com.exo.musicplayer.desktop.download.YouTubeAhead
 import com.exo.musicplayer.desktop.download.YouTubeSignIn
@@ -1143,6 +1145,24 @@ class DesktopController(parent: CoroutineScope) {
             settings.advancedMode = value
         }
 
+    private val tipsSeenState = mutableStateOf(settings.tipsSeen)
+
+    /** Whether the one-time tip on the Library page has been dismissed. */
+    var tipsSeen: Boolean
+        get() = tipsSeenState.value
+        set(value) {
+            tipsSeenState.value = value
+            settings.tipsSeen = value
+        }
+
+    /** How big everything is drawn; [UiScale.factor] is the state, this keeps it and the setting together. */
+    var uiScale: Float
+        get() = UiScale.factor
+        set(value) {
+            UiScale.factor = value
+            settings.uiScale = value
+        }
+
     private val railMoreState = mutableStateOf(settings.railMoreOpen)
 
     /** Whether the sidebar's More group (Moods, Stats) was left unfolded; remembered across runs. */
@@ -1158,6 +1178,7 @@ class DesktopController(parent: CoroutineScope) {
         Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)
         Notes.on = settings.hoverNotes
         Advanced.on = settings.advancedMode
+        UiScale.factor = settings.uiScale.coerceIn(UI_SCALES.first().second, UI_SCALES.last().second)
     }
 
     // Colours from the cover, after Riff (github.com/rootscripts/riff, MIT).

@@ -278,7 +278,8 @@ fun DesktopApp(
                                             destination = Destination.IDENTIFY
                                             controller.identifyFile(track)
                                         },
-                                        onOpenGroup = openGroup
+                                        onOpenGroup = openGroup,
+                                        onGoTo = { destination = it }
                                     )
                                 at == Destination.ALBUMS || at == Destination.ARTISTS ->
                                     CollectionScreen(

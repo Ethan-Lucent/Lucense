@@ -247,7 +247,7 @@ fun IdentifyScreen(controller: DesktopController, onChooseMedia: () -> File?) {
             } else {
                 // Riff's streaming: the whole list, online, one after another.
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    GhostButton("Stream all ${controller.youtubeResults.size}", icon = Icons.Default.PlayCircle) {
+                    GhostButton("Stream all ${controller.youtubeResults.size}", icon = Icons.Default.PlayCircle, note = Notes.ID_STREAM_ALL) {
                         controller.stream(StreamQueue.ofVideos("YouTube: ${controller.youtubeQuery}", controller.youtubeResults))
                     }
                     Spacer(Modifier.width(10.dp))
@@ -441,9 +441,9 @@ private fun MatchRow(
 
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             if (target != null) {
-                AccentButton("Use this") { onApply() }
+                AccentButton("Use this", note = Notes.ID_USE) { onApply() }
             } else {
-                GhostButton("Search this") { onUseAsQuery() }
+                GhostButton("Search this", note = Notes.ID_SEARCH) { onUseAsQuery() }
             }
             if (match.drmProtected) {
                 // Its audio is encrypted and there is no file to fetch. Saying
@@ -454,7 +454,7 @@ private fun MatchRow(
                     color = Palette.TextFaint
                 )
             } else {
-                GhostButton("Download", icon = Icons.Default.Download) { onDownload() }
+                GhostButton("Download", icon = Icons.Default.Download, note = Notes.ID_DOWNLOAD) { onDownload() }
             }
         }
     }

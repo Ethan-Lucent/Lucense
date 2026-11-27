@@ -105,7 +105,7 @@ fun PlaylistsScreen(
         Spacer(Modifier.height(20.dp))
 
         SectionTitle("Smart lists") {
-            AccentButton("New smart list", icon = Icons.Default.Add) { creatingSmart = true }
+            AccentButton("New smart list", icon = Icons.Default.Add, note = Notes.PL_NEW_SMART) { creatingSmart = true }
         }
         Spacer(Modifier.height(10.dp))
         controller.smartNote?.let { note ->
@@ -231,11 +231,11 @@ fun PlaylistsScreen(
                     onSubmit = { controller.playPrompt(prompt) }
                 )
                 Spacer(Modifier.width(10.dp))
-                AccentButton("Play", enabled = prompt.isNotBlank()) {
+                AccentButton("Play", enabled = prompt.isNotBlank(), note = Notes.PL_PLAY) {
                     controller.playPrompt(prompt)
                 }
                 Spacer(Modifier.width(8.dp))
-                GhostButton("Save as playlist", enabled = prompt.isNotBlank()) {
+                GhostButton("Save as playlist", enabled = prompt.isNotBlank(), note = Notes.PL_SAVE_PROMPT) {
                     controller.savePrompt(prompt)
                 }
             }
@@ -270,13 +270,13 @@ fun PlaylistsScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionTitle("Your playlists") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    GhostButton("From a link…", icon = Icons.Default.Link) { linking = !linking }
+                    GhostButton("From a link…", icon = Icons.Default.Link, note = Notes.PL_FROM_LINK) { linking = !linking }
                     Spacer(Modifier.width(8.dp))
-                    GhostButton("Import…", icon = Icons.Default.FileOpen) {
+                    GhostButton("Import…", icon = Icons.Default.FileOpen, note = Notes.PL_IMPORT) {
                         onPickPlaylistFile(false, "")?.let { controller.importPlaylist(it) }
                     }
                     Spacer(Modifier.width(8.dp))
-                    AccentButton("New playlist", icon = Icons.Default.Add) { creating = true }
+                    AccentButton("New playlist", icon = Icons.Default.Add, note = Notes.PL_NEW) { creating = true }
                 }
             }
         }
@@ -455,7 +455,7 @@ private fun ImportReview(
                 GhostButton("Cancel", onClick = onCancel)
                 Spacer(Modifier.width(8.dp))
                 if (onStream != null) {
-                    GhostButton("Stream it", icon = Icons.Default.PlayCircle, onClick = onStream)
+                    GhostButton("Stream it", icon = Icons.Default.PlayCircle, note = Notes.PL_STREAM, onClick = onStream)
                     Spacer(Modifier.width(8.dp))
                 }
                 if (result.missing.isNotEmpty()) {
@@ -558,19 +558,20 @@ private fun OpenPlaylist(
                             items.sumOf { it.durationMs }.asDuration()
                     )
                 }
-                AccentButton("Play", icon = Icons.Default.PlayArrow) {
+                AccentButton("Play", icon = Icons.Default.PlayArrow, note = Notes.PL_PLAY) {
                     items.firstOrNull()?.let { controller.play(it, items) }
                 }
                 Spacer(Modifier.width(8.dp))
-                GhostButton("Rename") { renaming = true }
+                GhostButton("Rename", note = Notes.PL_RENAME) { renaming = true }
                 Spacer(Modifier.width(8.dp))
                 GhostButton(
                     "Zip and ship",
                     enabled = !controller.archiveRunning,
-                    icon = Icons.Default.Archive
+                    icon = Icons.Default.Archive,
+                    note = Notes.ZIP_AND_SHIP
                 ) { controller.zipPlaylist(playlist) }
                 Spacer(Modifier.width(8.dp))
-                GhostButton("Export…", icon = Icons.Default.Save) {
+                GhostButton("Export…", icon = Icons.Default.Save, note = Notes.PL_EXPORT) {
                     onPickPlaylistFile(true, playlist.name)?.let {
                         controller.exportPlaylist(playlist, it)
                     }
@@ -760,6 +761,6 @@ private fun SmartCard(
             overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.height(8.dp))
-        GhostButton("Delete", onClick = onDelete)
+        GhostButton("Delete", note = Notes.PL_DELETE, onClick = onDelete)
     }
 }

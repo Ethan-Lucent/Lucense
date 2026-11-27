@@ -43,6 +43,47 @@ object Notes {
     const val ZIP_AND_SHIP = "Packs songs into a zip file to share or copy elsewhere."
 
 
+    // The sidebar: one line on what each page is for.
+    const val RAIL_LIBRARY = "All your songs."
+    const val RAIL_ALBUMS = "Your music grouped by album."
+    const val RAIL_ARTISTS = "Your music grouped by artist."
+    const val RAIL_PLAYLISTS = "Your playlists, smart lists and imports from a link."
+    const val RAIL_DISCOVER = "Genres to wander and artists to follow."
+    const val RAIL_IDENTIFY = "Find out what a song is."
+    const val RAIL_DOWNLOAD = "Save songs from YouTube, SoundCloud, Bandcamp and more."
+    const val RAIL_MOODS = "Songs that match the weather and time."
+    const val RAIL_STATS = "What you listen to, and when."
+    const val RAIL_SETTINGS = "Folders, look, playback and more."
+
+    // The bar that shows when songs are selected in the library.
+    const val SEL_PLAY = "Plays the songs you picked, one after another."
+    const val SEL_FAVOURITE = "Adds the songs you picked to your favourites."
+    const val SEL_FIX = "Looks up the right title, artist and cover for the songs you picked."
+    const val SEL_SHOW = "Opens the folder these songs are in."
+    const val SEL_CLEAR = "Lets go of the songs you picked."
+
+    // The Playlists page.
+    const val PL_NEW = "Makes an empty playlist you can fill."
+    const val PL_NEW_SMART = "A list that fills itself from a rule, such as a genre or a year."
+    const val PL_IMPORT = "Reads a playlist file, such as an M3U, from your computer."
+    const val PL_FROM_LINK = "Paste a Spotify, Apple Music, YouTube or SoundCloud playlist link."
+    const val PL_EXPORT = "Saves this playlist as a file you can keep or use elsewhere."
+    const val PL_RENAME = "Gives this playlist a new name."
+    const val PL_DELETE = "Removes the playlist. The songs stay in your library."
+    const val PL_STREAM = "Plays the whole list online, without downloading it."
+    const val PL_SAVE_PROMPT = "Keeps these songs as a playlist you can open again."
+    const val PL_PLAY = "Plays this playlist from the top."
+
+    // The Identify page.
+    const val ID_USE = "Puts this name and these details on your song."
+    const val ID_SEARCH = "Searches for this one instead."
+    const val ID_DOWNLOAD = "Saves this song to your library."
+    const val ID_STREAM_ALL = "Plays every result online, one after another."
+
+    // The Moods page.
+    const val MOODS_REFRESH = "Checks the weather again."
+    const val MOODS_PLAY = "Plays the songs picked for now."
+
     // The effects panel.
     const val FX_REMEMBER = "Brings these settings back whenever this song plays."
     const val FX_FORGET = "This song goes back to using the settings you have on now."

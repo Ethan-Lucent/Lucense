@@ -100,7 +100,7 @@ fun MoodsScreen(controller: DesktopController) {
                         )
                     }
                 }
-                GhostButton("Refresh", icon = Icons.Default.Refresh) {
+                GhostButton("Refresh", icon = Icons.Default.Refresh, note = Notes.MOODS_REFRESH) {
                     controller.refreshWeather(force = true)
                 }
             }
@@ -149,7 +149,7 @@ fun MoodsScreen(controller: DesktopController) {
                     "${controller.moodTracks.size} tracks lean towards " +
                         (condition?.label?.lowercase() ?: "this weather")
                 ) {
-                    AccentButton("Play these", icon = Icons.Default.PlayArrow) {
+                    AccentButton("Play these", icon = Icons.Default.PlayArrow, note = Notes.MOODS_PLAY) {
                         val queue = controller.moodTracks.map { it.first }
                         queue.firstOrNull()?.let { controller.play(it, queue) }
                     }

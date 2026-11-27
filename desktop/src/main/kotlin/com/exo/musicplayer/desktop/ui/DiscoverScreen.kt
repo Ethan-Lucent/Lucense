@@ -1246,7 +1246,7 @@ private fun IconAction(icon: ImageVector, description: String, tint: Color, onCl
 }
 
 @Composable
-private fun Chip(text: String, selected: Boolean = false, onClick: () -> Unit) {
+internal fun Chip(text: String, selected: Boolean = false, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Box(
