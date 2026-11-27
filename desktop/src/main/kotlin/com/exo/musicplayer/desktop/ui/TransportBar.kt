@@ -197,7 +197,10 @@ internal fun TransportBar(
 
 /** The middle slot's width: as wide as the seek line wants, and never narrower than the buttons need. */
 internal fun centreWidth(narrow: Boolean, showAb: Boolean): Dp =
-    maxOf(if (narrow) 284.dp else 380.dp, BUTTONS_NATURAL + if (showAb) 48.dp else 0.dp)
+    maxOf(if (narrow) 284.dp else 380.dp, BUTTONS_NATURAL + if (showAb) AB_BUTTON_WIDTH * 2 else 0.dp)
+
+/** The A-B button's slot: an icon button, 48 dp wide like the others. [TransportButtons] mirrors it on the left. */
+private val AB_BUTTON_WIDTH = 48.dp
 
 /** shuffle, previous, play, next, repeat side by side with no spare room: 4 round buttons of 48 and the 34 play disc. */
 private val BUTTONS_NATURAL = 48.dp * 4 + 34.dp
@@ -319,6 +322,11 @@ internal fun RowScope.TransportButtons(
     onRepeat: () -> Unit,
     onAb: () -> Unit
 ) {
+    // The buttons are spread evenly, so A-B on the right alone would drag play off the middle
+    // of the seek line (it sat about 37 px left of it). An empty slot of the same width on the
+    // left makes the row symmetric - spacer and A-B, shuffle and repeat, previous and next
+    // around the play disc - and the disc stays exactly under the middle of the line.
+    if (showAb) Spacer(Modifier.width(AB_BUTTON_WIDTH))
     Noted("Shuffle", Notes.SHUFFLE, iconOnly = true) {
         IconButton(onClick = onShuffle) {
             Icon(

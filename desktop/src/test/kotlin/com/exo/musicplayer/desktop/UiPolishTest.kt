@@ -235,6 +235,34 @@ class UiPolishTest {
         }
     }
 
+    /**
+     * The play button is under the middle of the seek line with or without the A-B button: A-B on the
+     * right alone used to push the evenly spread row to the left (play sat ~37 px off).
+     */
+    @Test
+    fun playButtonStaysUnderTheMiddleOfTheLineWithAbShown() {
+        for (width in listOf(760, 920, 1280)) for (ab in listOf(false, true)) {
+            runDesktopComposeUiTest(width, 120) {
+                setContent { fakeBar(width.dp, width < 1000, ab, false, "Midnight City", old = false) }
+                waitForIdle()
+                val centre = onNodeWithTag("bar-centre").getBoundsInRoot()
+                val play = onNodeWithContentDescription("Pause").getBoundsInRoot()
+                assertEquals(
+                    ((centre.left + centre.right) / 2).value, ((play.left + play.right) / 2).value, 1f,
+                    "play under the middle of the line at $width dp (ab=$ab)"
+                )
+                // And the row is symmetric: shuffle and repeat are as far from play on either side.
+                val shuffle = onNodeWithContentDescription("Shuffle on").getBoundsInRoot()
+                val repeat = onNodeWithContentDescription("Repeat all").getBoundsInRoot()
+                assertEquals(
+                    (play.left - shuffle.right).value, (repeat.left - play.right).value, 1.5f,
+                    "shuffle and repeat equally far from play at $width dp (ab=$ab)"
+                )
+                if (ab && width == 920) save(onRoot().captureToImage(), "bar-ab")
+            }
+        }
+    }
+
     /** The clocks and the line fill the middle slot exactly, so the row is as wide as the cluster. */
     @Test
     fun seekRowSpansTheCluster() = runDesktopComposeUiTest(1280, 120) {
