@@ -13,7 +13,6 @@ import androidx.compose.foundation.ContextMenuArea
 import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -125,7 +124,10 @@ class GroupActions(
     /** The album's songs dragged into a new order, to keep. */
     val reorder: (List<DesktopTrack>) -> Unit = {},
     /** Back to the album's own order, by track number. */
-    val resetOrder: () -> Unit = {}
+    val resetOrder: () -> Unit = {},
+    /** A song's stars, 0 for none, and giving it some (0 takes them away). */
+    val ratingOf: (DesktopTrack) -> Int = { 0 },
+    val rate: (DesktopTrack, Int) -> Unit = { _, _ -> }
 )
 
 /** What the page shows: read from the controller, or put together for a picture of it. */
@@ -523,28 +525,13 @@ private fun BigPlayButton(pause: Boolean, size: Dp, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun Tip(label: String) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelMedium,
-        color = Palette.Text,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(Palette.Raised)
-            .border(1.dp, Palette.Line, RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-    )
-}
-
 /** Where the handle to drag a song up or down sits, at the start of each row on an album's page. */
 private val HANDLE_WIDTH = 22.dp
 
 /** One of the quieter buttons beside the big one; [lit] in the accent when it is switched on. */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RoundIcon(label: String, icon: ImageVector, lit: Boolean = false, onClick: () -> Unit) {
-    TooltipArea(tooltip = { Tip(label) }) {
+    Noted(label, null, iconOnly = true) {
         val interaction = remember { MutableInteractionSource() }
         val hovered by interaction.collectIsHoveredAsState()
         Box(
@@ -683,15 +670,22 @@ private fun SongRow(
         items = {
             listOfNotNull(
                 ContextMenuItem(if (playingThis) "Pause" else "Play") { onPlay() },
-                ContextMenuItem("Play next") { actions.playNext(listOf(track)) },
-                ContextMenuItem("Add to queue") { actions.addToQueue(listOf(track)) },
+                NotedMenuItem("Play next", Notes.PLAY_NEXT) { actions.playNext(listOf(track)) },
+                NotedMenuItem("Add to queue", Notes.ADD_TO_QUEUE) { actions.addToQueue(listOf(track)) },
                 ContextMenuItem(if (favourite) "Remove from favourites" else "Add to favourites") {
                     actions.toggleFavourite(track)
                 },
-                ContextMenuItem("Add to playlist...") { actions.addToPlaylist(listOf(track)) },
-                ContextMenuItem("Edit details...") { actions.edit(track) },
-                album?.let { ContextMenuItem("Go to album") { actions.openAlbum(it.key) } },
-                ContextMenuItem(SHOW_IN_FOLDER) { actions.reveal(track.file) }
+                NotedMenuItem("Add to playlist...", Notes.ADD_TO_PLAYLIST) { actions.addToPlaylist(listOf(track)) },
+                RatingMenuItem(actions.ratingOf(track)) { actions.rate(track, it) },
+                NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { actions.edit(track) },
+                // The seldom-used rows tucked away, as in the library's menu.
+                SubmenuItem(
+                    "More",
+                    listOfNotNull(
+                        album?.let { ContextMenuItem("Go to album") { actions.openAlbum(it.key) } },
+                        ContextMenuItem(SHOW_IN_FOLDER) { actions.reveal(track.file) }
+                    )
+                )
             )
         }
     ) {
@@ -718,7 +712,7 @@ private fun SongRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (handle != null) {
-                TooltipArea(tooltip = { Tip("Drag to move it up or down") }) {
+                Noted("Drag to move it up or down", null, iconOnly = true) {
                     Box(
                         Modifier.width(HANDLE_WIDTH).height(30.dp).testTag("handle:" + track.file.absolutePath).then(handle),
                         contentAlignment = Alignment.CenterStart

@@ -3,6 +3,11 @@ package com.exo.musicplayer.desktop.data
 import com.exo.musicplayer.desktop.system.Platform
 import com.exo.musicplayer.desktop.system.Mpris
 import com.exo.musicplayer.desktop.ui.Glass
+import com.exo.musicplayer.desktop.ui.Advanced
+import com.exo.musicplayer.desktop.ui.Notes
+import com.exo.musicplayer.desktop.ui.UI_SCALES
+import com.exo.musicplayer.desktop.ui.UiScale
+import com.exo.musicplayer.desktop.ui.SettingsTab
 import com.exo.musicplayer.desktop.download.YouTubeAhead
 import com.exo.musicplayer.desktop.download.YouTubeSignIn
 import com.exo.musicplayer.data.playlist.ParsedPlaylist
@@ -119,6 +124,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -1120,9 +1126,60 @@ class DesktopController(parent: CoroutineScope) {
             settings.glassSeeThrough = Glass.seeThrough
         }
 
+    /**
+     * Whether resting the mouse on a menu item shows its note. [Notes.on] is
+     * already Compose state, so it is the mirror; this keeps it and the
+     * setting together, as [glass] does with [Glass.on].
+     */
+    var hoverNotes: Boolean
+        get() = Notes.on
+        set(value) {
+            Notes.on = value
+            settings.hoverNotes = value
+        }
+
+    /** Whether the extra controls are shown; [Advanced.on] is the state, this keeps it and the setting together. */
+    var advancedMode: Boolean
+        get() = Advanced.on
+        set(value) {
+            Advanced.on = value
+            settings.advancedMode = value
+        }
+
+    private val tipsSeenState = mutableStateOf(settings.tipsSeen)
+
+    /** Whether the one-time tip on the Library page has been dismissed. */
+    var tipsSeen: Boolean
+        get() = tipsSeenState.value
+        set(value) {
+            tipsSeenState.value = value
+            settings.tipsSeen = value
+        }
+
+    /** How big everything is drawn; [UiScale.factor] is the state, this keeps it and the setting together. */
+    var uiScale: Float
+        get() = UiScale.factor
+        set(value) {
+            UiScale.factor = value
+            settings.uiScale = value
+        }
+
+    private val railMoreState = mutableStateOf(settings.railMoreOpen)
+
+    /** Whether the sidebar's More group (Moods, Stats) was left unfolded; remembered across runs. */
+    var railMoreOpen: Boolean
+        get() = railMoreState.value
+        set(value) {
+            railMoreState.value = value
+            settings.railMoreOpen = value
+        }
+
     init {
         Glass.on = settings.glass
         Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)
+        Notes.on = settings.hoverNotes
+        Advanced.on = settings.advancedMode
+        UiScale.factor = settings.uiScale.coerceIn(UI_SCALES.first().second, UI_SCALES.last().second)
     }
 
     // Colours from the cover, after Riff (github.com/rootscripts/riff, MIT).
@@ -1188,6 +1245,16 @@ class DesktopController(parent: CoroutineScope) {
         set(value) {
             reactiveModeState.value = value
             settings.reactiveMode = value.name
+        }
+
+    private val ballCoverState = mutableStateOf(settings.ballCover)
+
+    /** Whether Reactive's ball has the playing song's cover in the middle. */
+    var ballCover: Boolean
+        get() = ballCoverState.value
+        set(value) {
+            ballCoverState.value = value
+            settings.ballCover = value
         }
 
     /** Lyrics popped out into a window of their own. */
@@ -2198,24 +2265,6 @@ class DesktopController(parent: CoroutineScope) {
 
     // ---- Identify -----------------------------------------------------------
 
-    /**
-     * One Identify tab's own box, results and word on how it went.
-     *
-     * The tabs used to share one box, one list and one status line, so a
-     * lyrics search's results showed under Name, and a search that finished
-     * after the tab was changed landed in whichever tab was open by then. Now
-     * each tab keeps its own for as long as the app is open (not from one
-     * launch to the next), and a search writes into the tab it was started
-     * from.
-     */
-    class IdentifyTab {
-        var query by mutableStateOf("")
-        var results by mutableStateOf<List<MusicMatch>>(emptyList())
-        var status by mutableStateOf<String?>(null)
-        var busy by mutableStateOf(false)
-        var needsFfmpeg by mutableStateOf(false)
-    }
-
     private val identifyTabs = IdentifyMode.entries.associateWith { IdentifyTab() }
 
     /** The tab [mode] keeps; the open one by default. */
@@ -2237,6 +2286,28 @@ class DesktopController(parent: CoroutineScope) {
     /** Artist and title asked for separately, so each can be scored on its own field. */
     var identifyArtist by mutableStateOf("")
     var identifyTitle by mutableStateOf("")
+
+    /**
+     * The tab bar's switch: clears the tab being left, then opens [to].
+     *
+     * Only the tab bar calls this. The buttons that carry text from one tab to
+     * another set [identifyMode] directly, because there the text has to
+     * survive the move.
+     */
+    fun switchIdentifyTab(to: IdentifyMode) {
+        if (to == identifyMode) return
+        clearLeftIdentifyTab(identifyMode, identifyTabs) { left ->
+            when (left) {
+                IdentifyMode.NAME -> {
+                    identifyArtist = ""
+                    identifyTitle = ""
+                }
+                IdentifyMode.YOUTUBE -> resetYouTubeTab()
+                else -> Unit
+            }
+        }
+        identifyMode = to
+    }
 
     // ---- YouTube search -----------------------------------------------------
     //
@@ -2262,7 +2333,13 @@ class DesktopController(parent: CoroutineScope) {
      */
     private val linkFinder = YouTubeLinkFinder(youtube)
 
-    val preview = PreviewPlayer { ToolPaths.ffmpeg }
+    // Previews play at the gain the engine is already at (slider, mute, duck and
+    // sleep fade included), read from the same place, so they can't be louder
+    // than the song would be at this setting.
+    val preview = PreviewPlayer(
+        ffmpegPath = { ToolPaths.ffmpeg },
+        volume = { engine.effects.volume },
+    )
 
     var youtubeResults by mutableStateOf<List<YouTubeVideo>>(emptyList())
         private set
@@ -2271,15 +2348,36 @@ class DesktopController(parent: CoroutineScope) {
     var youtubeStatus by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Bumped whenever the YouTube tab is cleared, the same job
+     * [IdentifyTab.generation] does for the other tabs: a search that was
+     * started before the clear finds the number changed and drops its answer.
+     */
+    private var youtubeGeneration = 0
+
+    /** Empties the YouTube tab (box, results, status, busy bar). The preview card is left alone. */
+    private fun resetYouTubeTab() {
+        youtubeGeneration++
+        youtubeQuery = ""
+        youtubeResults = emptyList()
+        youtubeStatus = null
+        youtubeBusy = false
+    }
+
     fun searchYouTube(text: String = youtubeQuery) {
         val query = text.trim()
         if (query.isBlank() || youtubeBusy) return
 
         youtubeBusy = true
         youtubeStatus = "Searching YouTube…"
+        val generation = youtubeGeneration
         scope.launch {
             val result = youtube.search(query, limit = 25)
+            if (generation != youtubeGeneration) return@launch
             youtubeResults = result.videos
+            // The first few are read now, while the list is being looked at, so a
+            // preview starts at once instead of waiting for yt-dlp (several seconds).
+            if (tools.ready) YouTubeAhead.lookAhead(result.videos.take(SEARCH_AHEAD).map { it.id }, downloadQuality)
             youtubeStatus = when {
                 result.videos.isEmpty() ->
                     "Nothing came back. yt-dlp may need updating — one click in " +
@@ -2610,8 +2708,10 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Searching lyrics..."
+        val generation = tab.generation
         scope.launch {
             val results = lyricSearch.searchAll(text, limitPer = 8)
+            if (!tab.accepts(generation)) return@launch
             tab.results = results
             tab.status = if (results.isEmpty()) {
                 "No song matched those words. Try a longer or more distinctive line."
@@ -2634,7 +2734,8 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Reading ${file.name}..."
-        scope.launch { fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab) }
+        val generation = tab.generation
+        scope.launch { fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab, generation = generation) }
     }
 
     /**
@@ -2656,6 +2757,7 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Fetching audio from that link..."
+        val generation = tab.generation
 
         scope.launch {
             val staging = io {
@@ -2663,11 +2765,14 @@ class DesktopController(parent: CoroutineScope) {
             }
             try {
                 val resolved = io { LinkResolver.resolve(target) }
+                if (!tab.accepts(generation)) return@launch
                 val fetchTarget = when (resolved) {
                     is ResolvedLink.Direct -> resolved.url
                     is ResolvedLink.Search -> {
                         tab.status = "Finding that track on YouTube..."
-                        when (val found = linkFinder.find(YouTubeLinkFinder.Wanted(title = resolved.query))) {
+                        val outcome = linkFinder.find(YouTubeLinkFinder.Wanted(title = resolved.query))
+                        if (!tab.accepts(generation)) return@launch
+                        when (val found = outcome) {
                             is YouTubeLinkFinder.Outcome.Found -> found.pick.video.watchUrl
                             is YouTubeLinkFinder.Outcome.NothingSuitable -> {
                                 tab.status = found.message
@@ -2692,12 +2797,13 @@ class DesktopController(parent: CoroutineScope) {
                     embedThumbnail = false,
                     wholePlaylist = false,
                     onProgress = { progress ->
-                        progress.percent?.let {
+                        progress.percent?.takeIf { tab.accepts(generation) }?.let {
                             tab.status = "Fetching audio... ${(it * 100).toInt()}%"
                         }
                     }
                 )
 
+                if (!tab.accepts(generation)) return@launch
                 val file = result.getOrNull()?.firstOrNull()
                 if (file == null) {
                     tab.status = result.exceptionOrNull()?.message
@@ -2705,16 +2811,29 @@ class DesktopController(parent: CoroutineScope) {
                     tab.busy = false
                     return@launch
                 }
-                fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab)
+                fingerprint(file, file.nameWithoutExtension, markPath = null, tab = tab, generation = generation)
             } finally {
                 io { staging.deleteRecursively() }
             }
         }
     }
 
-    /** Shared tail of every fingerprint route. */
-    private suspend fun fingerprint(file: File, fallbackName: String, markPath: String?, tab: IdentifyTab) {
-        when (val outcome = MediaAudio.sample(file)) {
+    /**
+     * Shared tail of every fingerprint route.
+     *
+     * [generation] is the tab's number when the work began; if the tab was
+     * cleared meanwhile (the user left it), the answer is dropped.
+     */
+    private suspend fun fingerprint(
+        file: File,
+        fallbackName: String,
+        markPath: String?,
+        tab: IdentifyTab,
+        generation: Int
+    ) {
+        val outcome = MediaAudio.sample(file)
+        if (!tab.accepts(generation)) return
+        when (outcome) {
             SampleOutcome.NeedsFfmpeg -> {
                 tab.needsFfmpeg = true
                 tab.status = "That format needs ffmpeg - one click in the Download tab."
@@ -2728,7 +2847,9 @@ class DesktopController(parent: CoroutineScope) {
 
             is SampleOutcome.Ok -> {
                 tab.status = "Matching against Shazam..."
-                when (val result = shazam.recognize(outcome.samples)) {
+                val recognised = shazam.recognize(outcome.samples)
+                if (!tab.accepts(generation)) return
+                when (val result = recognised) {
                     is RecognitionResult.Found -> {
                         tab.results = result.matches
                         val best = result.matches.firstOrNull()
@@ -2768,11 +2889,13 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Searching seven catalogues..."
+        val generation = tab.generation
         scope.launch {
             // Providers take a single string, so the halves are joined for the
             // lookup and separated again only for scoring.
             val combined = listOf(artist, title).filter { it.isNotBlank() }.joinToString(" ")
             val found = catalogue.searchAll(combined, limitPer = 8)
+            if (!tab.accepts(generation)) return@launch
             val results = MatchRanker.rankSplit(artist, title, found)
             tab.results = results
 
@@ -2796,8 +2919,10 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Searching seven catalogues…"
+        val generation = tab.generation
         scope.launch {
             val found = catalogue.searchAll(text, limitPer = 8)
+            if (!tab.accepts(generation)) return@launch
             // Providers each answer loosely and none of them can see the others,
             // so relevance is decided here rather than trusting whatever order
             // they came back in.
@@ -2825,8 +2950,9 @@ class DesktopController(parent: CoroutineScope) {
         tab.busy = true
         tab.needsFfmpeg = false
         tab.status = "Fingerprinting ${track.title}..."
+        val generation = tab.generation
         scope.launch {
-            fingerprint(track.file, track.title, markPath = track.file.absolutePath, tab = tab)
+            fingerprint(track.file, track.title, markPath = track.file.absolutePath, tab = tab, generation = generation)
         }
     }
 
@@ -2834,6 +2960,7 @@ class DesktopController(parent: CoroutineScope) {
     fun applyMatch(track: DesktopTrack, match: MusicMatch) {
         val tab = identifyTab()
         tab.busy = true
+        val generation = tab.generation
         scope.launch {
             if (writeTags) {
                 io {
@@ -2848,8 +2975,12 @@ class DesktopController(parent: CoroutineScope) {
             }
             coverOf(match)?.let { Covers.fetchAndStore(track, it, writeTags) }
             io { store.mark(track.file.absolutePath, "identifiedAt") }
-            tab.status = "Applied \"${match.display}\" to ${track.file.name}."
-            tab.busy = false
+            // The tags are written either way; only the word about it is
+            // dropped if the tab was left (and cleared) in the meantime.
+            if (tab.accepts(generation)) {
+                tab.status = "Applied \"${match.display}\" to ${track.file.name}."
+                tab.busy = false
+            }
             rescan()
         }
     }
@@ -2921,14 +3052,29 @@ class DesktopController(parent: CoroutineScope) {
         private set
     private var bulkJob: Job? = null
 
-    private enum class BulkOutcome { UPDATED, ALREADY_HAD, NOTHING_FOUND }
-
     private fun Boolean.asOutcome() = if (this) BulkOutcome.UPDATED else BulkOutcome.NOTHING_FOUND
 
+    /** What the last bulk run was asked to do, so a stopped one can be run again in a click. */
+    private class LastBulk(val kind: BulkKind, val names: Boolean, val tags: Boolean)
+    private var lastBulk: LastBulk? = null
+
+    /** True when the run that just ended was stopped and can be picked up again. */
+    val canRunBulkAgain: Boolean get() = bulk.stopped && !bulk.running && lastBulk?.kind?.label == bulk.label
+
+    /** Picks a stopped run up again: it visits exactly the songs not yet marked as done. */
+    fun runBulkAgain(redo: Boolean = false) {
+        lastBulk?.let { runBulk(it.kind, redo, it.names, it.tags) }
+    }
+
     fun cancelBulk() {
+        if (!bulk.running) return
         bulkJob?.cancel()
         bulkJob = null
-        bulk = bulk.copy(running = false, finishedNote = "Stopped.")
+        // Counted from what was really finished and marked, never from songs in flight.
+        bulk = bulk.copy(
+            running = false, current = "", stopped = true,
+            finishedNote = stoppedNote(bulk.done, bulk.total)
+        )
     }
 
     /**
@@ -2946,6 +3092,7 @@ class DesktopController(parent: CoroutineScope) {
     fun runBulk(kind: BulkKind, redo: Boolean, names: Boolean = true, tags: Boolean = true) {
         if (bulk.running) return
         val column = kind.markColumn
+        lastBulk = LastBulk(kind, names, tags)
         bulkJob = scope.launch {
             val already = if (redo || column == null) emptySet() else io { store.markedPaths(column) }
             val queue = if (kind == BulkKind.REPAIR) {
@@ -2959,7 +3106,7 @@ class DesktopController(parent: CoroutineScope) {
                         it.title == it.file.nameWithoutExtension
                 }
             } else {
-                tracks.filter { redo || it.file.absolutePath !in already }
+                bulkQueue(tracks, { it.file.absolutePath }, already, redo)
             }
             val skipped = tracks.size - queue.size
 
@@ -2989,6 +3136,8 @@ class DesktopController(parent: CoroutineScope) {
                 }
             }
 
+            // Stopped meanwhile: cancelBulk already wrote the note, don't overwrite it.
+            ensureActive()
             bulk = bulk.copy(
                 running = false,
                 done = queue.size,
@@ -3008,65 +3157,23 @@ class DesktopController(parent: CoroutineScope) {
         }
     }
 
-    private data class Tally(val updated: Int, val alreadyHad: Int, val failed: Int)
-
-    /**
-     * Takes [queue] through [step] a few songs at a time, keeping [bulk] up to
-     * date as it goes.
-     *
-     * Lookups mostly wait on the network, so several songs go at once. Workers
-     * share the UI thread between suspensions, so the counters need no locking.
-     * A song that throws counts as nothing found rather than ending the run.
-     */
+    /** The run's own loop lives in BulkRun.kt (where it can be tested); this feeds it [bulk]. */
     private suspend fun workThrough(
         queue: List<DesktopTrack>,
         workers: Int,
         afterEach: suspend (DesktopTrack) -> Unit = {},
         step: suspend (DesktopTrack) -> BulkOutcome
-    ): Tally {
-        var done = 0
-        var updated = 0
-        var alreadyHad = 0
-        var failed = 0
-        val inFlight = mutableListOf<String>()
-        val work = Channel<DesktopTrack>(Channel.UNLIMITED)
-        queue.forEach { work.trySend(it) }
-        work.close()
-
-        coroutineScope {
-            repeat(workers) {
-                launch {
-                    for (track in work) {
-                        inFlight += track.title
-                        bulk = bulk.copy(current = inFlight.joinToString("  ·  "))
-                        val outcome = try {
-                            step(track)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Exception) {
-                            BulkOutcome.NOTHING_FOUND
-                        }
-                        when (outcome) {
-                            BulkOutcome.UPDATED -> updated++
-                            BulkOutcome.ALREADY_HAD -> alreadyHad++
-                            BulkOutcome.NOTHING_FOUND -> failed++
-                        }
-                        afterEach(track)
-                        done++
-                        inFlight -= track.title
-                        bulk = bulk.copy(
-                            done = done,
-                            updated = updated,
-                            alreadyHad = alreadyHad,
-                            failed = failed,
-                            current = inFlight.joinToString("  ·  ")
-                        )
-                    }
-                }
-            }
-        }
-        return Tally(updated, alreadyHad, failed)
-    }
+    ): BulkTally = workThroughQueue(
+        queue, workers, label = { it.title },
+        onProgress = { p ->
+            bulk = bulk.copy(
+                done = p.done, updated = p.updated, alreadyHad = p.alreadyHad,
+                failed = p.failed, current = p.current
+            )
+        },
+        afterEach = afterEach,
+        step = step
+    )
 
     // ---- Fix: the songs picked out, the parts ticked -------------------------
 
@@ -3112,6 +3219,7 @@ class DesktopController(parent: CoroutineScope) {
                 if (genres) add("genres for $genred")
                 if (lyrics) add("lyrics for $lyricked")
             }
+            ensureActive()
             bulk = bulk.copy(
                 running = false,
                 done = targets.size,
@@ -4459,6 +4567,24 @@ class DesktopController(parent: CoroutineScope) {
     /** Whether the list of keyboard shortcuts is on screen. */
     var showShortcuts by mutableStateOf(false)
 
+    /** Whether the Ctrl+K palette is open, and what is in its box when it opens - a pasted link, say. */
+    var paletteOpen by mutableStateOf(false)
+    var paletteText by mutableStateOf("")
+        private set
+
+    /** Ctrl+K: opens the palette, or closes it when open; [text] opens it with that already typed. */
+    fun openPalette(text: String? = null) {
+        if (text == null && paletteOpen) {
+            paletteOpen = false
+            return
+        }
+        paletteText = text.orEmpty()
+        paletteOpen = true
+    }
+
+    /** The Settings tab on show, kept here so the palette can open Settings at one. */
+    var settingsTab by mutableStateOf(SettingsTab.LIBRARY)
+
     // ---- Genres --------------------------------------------------------------------
 
     /** Every genre in the library with how many songs carry it, commonest first. */
@@ -4689,6 +4815,9 @@ class DesktopController(parent: CoroutineScope) {
         /** How many of Your YouTube's songs, and of an opened mix's, are read ahead. */
         const val FOR_YOU_AHEAD = 10
         const val MIX_AHEAD = 5
+
+        /** How many of the Identify → YouTube search results are read ahead: the ones in view. */
+        const val SEARCH_AHEAD = 6
     }
 
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }

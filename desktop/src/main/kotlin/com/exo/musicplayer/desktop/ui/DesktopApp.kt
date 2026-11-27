@@ -4,6 +4,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.LocalContextMenuRepresentation
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.HazeState
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -164,7 +165,11 @@ fun DesktopApp(
         } else {
             Wallpaper(controller.wallpaper, controller.wallpaperDim, Modifier.matchParentSize())
         }
-        CompositionLocalProvider(LocalGlass provides glassState.takeIf { glass }) {
+        // Every right-click menu, text fields' included, is Lucense's own (LucenseMenu.kt).
+        CompositionLocalProvider(
+            LocalGlass provides glassState.takeIf { glass },
+            LocalContextMenuRepresentation provides LucenseContextMenu
+        ) {
         // The window's width in the steps the layout changes at, so resizing it
         // rebuilds nothing until one is crossed (see LocalWindowWidth).
         val density = LocalDensity.current
@@ -193,7 +198,9 @@ fun DesktopApp(
                         destination = it
                         showSettings = false
                     },
-                    onSettings = { showSettings = !showSettings }
+                    onSettings = { showSettings = !showSettings },
+                    bulkOpen = dialog == DialogKind.BULK,
+                    onOpenBulk = { dialog = DialogKind.BULK }
                 )
 
                 if (glass) Spacer(Modifier.width(Glass.GAP))
@@ -216,6 +223,7 @@ fun DesktopApp(
                         graph = controller.songGraph,
                         beat = controller.engine.beat,
                         reactiveMode = controller.reactiveMode,
+                        ballCover = rememberBallCover(status.track, controller.ballCover),
                         modifier = Modifier.matchParentSize()
                     )
                     var paneWidth by remember { mutableStateOf(PANE_STEPS.last()) }
@@ -273,7 +281,8 @@ fun DesktopApp(
                                             destination = Destination.IDENTIFY
                                             controller.identifyFile(track)
                                         },
-                                        onOpenGroup = openGroup
+                                        onOpenGroup = openGroup,
+                                        onGoTo = { destination = it }
                                     )
                                 at == Destination.ALBUMS || at == Destination.ARTISTS ->
                                     CollectionScreen(
@@ -382,6 +391,26 @@ fun DesktopApp(
             DialogKind.ADD_TO_PLAYLIST ->
                 AddToPlaylistDialog(controller, playlistTargets) { dialog = null }
             null -> Unit
+        }
+
+        if (controller.paletteOpen) {
+            CommandPalette(
+                controller = controller,
+                onGo = {
+                    destination = it
+                    showSettings = false
+                },
+                onSettings = { tab ->
+                    tab?.let { controller.settingsTab = it }
+                    showSettings = true
+                },
+                onOpenGroup = openGroup,
+                onBulk = { dialog = DialogKind.BULK },
+                onDuplicates = {
+                    controller.findDuplicates()
+                    dialog = DialogKind.DUPLICATES
+                }
+            )
         }
 
         if (controller.dropHover) {

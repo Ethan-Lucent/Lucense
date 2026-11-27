@@ -13,7 +13,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,6 +73,46 @@ import java.io.File
 import java.util.Locale
 import com.exo.musicplayer.desktop.system.Platform
 
+/** What a new person can do before there are any files: three ways to get music, each a click to the page for it. */
+@Composable
+internal fun FirstRunCards(onGoTo: (Destination) -> Unit) {
+    Row(
+        Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        FirstRunCard(
+            Modifier.weight(1f), Destination.DOWNLOAD.icon, "Download a song",
+            "Paste a link from YouTube, SoundCloud or Bandcamp."
+        ) { onGoTo(Destination.DOWNLOAD) }
+        FirstRunCard(
+            Modifier.weight(1f), Destination.DISCOVER.icon, "Discover music",
+            "Wander through genres and artists you might like."
+        ) { onGoTo(Destination.DISCOVER) }
+        FirstRunCard(
+            Modifier.weight(1f), Destination.IDENTIFY.icon, "Identify a song",
+            "Find out what a song is by name, lyrics, a file or a link."
+        ) { onGoTo(Destination.IDENTIFY) }
+    }
+}
+
+@Composable
+private fun FirstRunCard(modifier: Modifier, icon: ImageVector, title: String, line: String, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Panel(
+        modifier
+            .hoverable(interaction)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Icon(icon, null, Modifier.size(22.dp), tint = if (hovered) Palette.Accent else Palette.TextDim)
+        Spacer(Modifier.height(8.dp))
+        Text(title, style = MaterialTheme.typography.titleSmall, color = Palette.Text)
+        Spacer(Modifier.height(2.dp))
+        Text(line, style = MaterialTheme.typography.bodySmall, color = Palette.TextDim)
+    }
+}
+
 @Composable
 internal fun LibraryPane(
     controller: DesktopController,
@@ -77,17 +121,33 @@ internal fun LibraryPane(
     onAddFolder: () -> Unit,
     onAddToPlaylist: (List<DesktopTrack>) -> Unit,
     onIdentify: (DesktopTrack) -> Unit,
-    onOpenGroup: (CollectionKind, String) -> Unit
+    onOpenGroup: (CollectionKind, String) -> Unit,
+    onGoTo: (Destination) -> Unit
 ) {
     if (controller.tracks.isEmpty() && !controller.scanning) {
+        // Scrolls, so the cards under the button are still reachable in a short window.
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState(
-                icon = Icons.Default.FolderOpen,
-                title = "No music yet",
-                body = "Point Lucense at a folder and it reads what's inside.\n" +
-                    "Your files stay exactly where they are.",
-                action = { AccentButton("Choose folder", onClick = onAddFolder) }
-            )
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                EmptyState(
+                    icon = Icons.Default.FolderOpen,
+                    title = "No music yet",
+                    body = "Point Lucense at a folder and it reads what's inside.\n" +
+                        "Your files stay exactly where they are.",
+                    action = {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            AccentButton("Choose folder", onClick = onAddFolder)
+                            Spacer(Modifier.height(28.dp))
+                            Text(
+                                "Or start without any files",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = Palette.TextDim
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            FirstRunCards(onGoTo)
+                        }
+                    }
+                )
+            }
         }
         return
     }
@@ -97,6 +157,21 @@ internal fun LibraryPane(
     val windowInfo = LocalWindowInfo.current
 
     Column(Modifier.fillMaxSize()) {
+        // Said once, to someone new; an existing install starts with it seen (tipsSeenDefault).
+        if (!controller.tipsSeen) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Tip: press Ctrl+K to find anything, and right-click a song for more.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.Accent,
+                    modifier = Modifier.weight(1f)
+                )
+                GhostButton("Got it") { controller.tipsSeen = true }
+            }
+        }
         if (controller.hasSelection) {
             SelectionBar(controller, tracks)
         }
@@ -217,21 +292,51 @@ private fun HeaderCell(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * The revert entry, and only when there is something to go back to.
- *
- * A menu offering an action that cannot do anything is worse than one that does
- * not mention it, and a context menu item has no disabled state to use instead.
+ * The right-click menu of a song in the library: what is done to nearly every
+ * song first, in one short list, and the rest under "More" - cutting it,
+ * naming it from its sound, finding the file, undoing what Lucense changed.
+ * Delete stays last, out of the way of the rows used most. Pure on purpose:
+ * the rows and their order can be checked without a window.
  */
-private fun revertItems(controller: DesktopController, track: DesktopTrack): List<ContextMenuItem> =
-    if (!controller.canRevert(track)) {
-        emptyList()
-    } else {
+internal fun songMenu(
+    favourite: Boolean,
+    rating: Int,
+    canRevert: Boolean,
+    onPlay: () -> Unit,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onToggleFavourite: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onEdit: () -> Unit,
+    onRate: (Int) -> Unit,
+    onTrim: () -> Unit,
+    onIdentify: () -> Unit,
+    onShowInFolder: () -> Unit,
+    onRevert: () -> Unit,
+    onDelete: () -> Unit
+): List<ContextMenuItem> = listOf(
+    ContextMenuItem("Play") { onPlay() },
+    NotedMenuItem("Play next", Notes.PLAY_NEXT) { onPlayNext() },
+    NotedMenuItem("Add to queue", Notes.ADD_TO_QUEUE) { onAddToQueue() },
+    ContextMenuItem(if (favourite) "Remove from favourites" else "Add to favourites") { onToggleFavourite() },
+    NotedMenuItem("Add to playlist...", Notes.ADD_TO_PLAYLIST) { onAddToPlaylist() },
+    RatingMenuItem(rating) { onRate(it) },
+    NotedMenuItem("Edit details...", Notes.EDIT_DETAILS) { onEdit() },
+    SubmenuItem(
+        "More",
         listOf(
-            ContextMenuItem("Revert to the file's own details") {
-                controller.revertToOriginal(listOf(track))
-            }
-        )
-    }
+            NotedMenuItem("Trim...", Notes.TRIM) { onTrim() },
+            NotedMenuItem("Identify this track", Notes.IDENTIFY) { onIdentify() },
+            ContextMenuItem(Platform.showInFolder) { onShowInFolder() }
+        ) + if (canRevert) {
+            // Only where Lucense has changed the song's details, as before.
+            listOf(NotedMenuItem("Revert to the file's own details", Notes.REVERT) { onRevert() })
+        } else {
+            emptyList()
+        }
+    ),
+    NotedMenuItem("Delete (move to ${Platform.trashName})", Notes.DELETE) { onDelete() }
+)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -253,32 +358,27 @@ private fun TrackRow(
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
 
-    // Right-click gets the platform's own menu, which is what Windows users
-    // reach for and what a hand-drawn popup never quite matches.
+    // Right-click opens Lucense's own menu (LucenseContextMenu, provided at the
+    // root), which keeps the platform menu's habits - opens at the pointer,
+    // arrows and Enter - and can hold the rating as one slider.
     ContextMenuArea(
         items = {
-            listOf(
-                ContextMenuItem("Play") { onPlay() },
-                ContextMenuItem("Play next") { controller.playNext(listOf(track)) },
-                ContextMenuItem("Add to queue") { controller.addToQueue(listOf(track)) },
-                ContextMenuItem(
-                    if (isFavourite) "Remove from favourites" else "Add to favourites"
-                ) { controller.toggleFavourite(track) },
-                ContextMenuItem("Add to playlist...") { onAddToPlaylist() },
-                ContextMenuItem("Edit details...") { controller.editTarget = track },
-                ContextMenuItem("Trim...") { controller.trimming = track },
-                ContextMenuItem("Identify this track") { onIdentify() },
-                ContextMenuItem("Rate ★★★★★") { controller.setRating(track, 5) },
-                ContextMenuItem("Rate ★★★★") { controller.setRating(track, 4) },
-                ContextMenuItem("Rate ★★★") { controller.setRating(track, 3) },
-                ContextMenuItem("Rate ★★") { controller.setRating(track, 2) },
-                ContextMenuItem("Rate ★") { controller.setRating(track, 1) },
-                ContextMenuItem("Clear rating") { controller.setRating(track, 0) },
-                ContextMenuItem(Platform.showInFolder) { revealInExplorer(track.file) }
-            ) + revertItems(controller, track) + listOf(
-                ContextMenuItem("Delete (move to ${Platform.trashName})") {
-                    controller.deleteTracks(listOf(track))
-                }
+            songMenu(
+                favourite = isFavourite,
+                rating = controller.ratingOf(track),
+                canRevert = controller.canRevert(track),
+                onPlay = onPlay,
+                onPlayNext = { controller.playNext(listOf(track)) },
+                onAddToQueue = { controller.addToQueue(listOf(track)) },
+                onToggleFavourite = { controller.toggleFavourite(track) },
+                onAddToPlaylist = onAddToPlaylist,
+                onEdit = { controller.editTarget = track },
+                onRate = { controller.setRating(track, it) },
+                onTrim = { controller.trimming = track },
+                onIdentify = onIdentify,
+                onShowInFolder = { revealInExplorer(track.file) },
+                onRevert = { controller.revertToOriginal(listOf(track)) },
+                onDelete = { controller.deleteTracks(listOf(track)) }
             )
         }
     ) {
@@ -458,48 +558,48 @@ private fun SelectionBar(controller: DesktopController, visible: List<DesktopTra
             Modifier.weight(1f).fadingHorizontalScroll(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            GhostButton("Play", icon = Icons.Default.PlayArrow) {
+            GhostButton("Play", icon = Icons.Default.PlayArrow, note = Notes.SEL_PLAY) {
                 controller.playSelection(visible)
             }
             Spacer(Modifier.width(6.dp))
-            GhostButton("Play next", icon = Icons.Default.QueuePlayNext) {
+            GhostButton("Play next", icon = Icons.Default.QueuePlayNext, note = Notes.PLAY_NEXT) {
                 controller.playNext(controller.selectedTracks(visible))
             }
             Spacer(Modifier.width(6.dp))
-            GhostButton("Queue", icon = Icons.Default.PlaylistAdd) {
+            GhostButton("Queue", icon = Icons.Default.PlaylistAdd, note = Notes.ADD_TO_QUEUE) {
                 controller.addToQueue(controller.selectedTracks(visible))
             }
             Spacer(Modifier.width(14.dp))
-            GhostButton("Favourite", icon = Icons.Default.FavoriteBorder) {
+            GhostButton("Favourite", icon = Icons.Default.FavoriteBorder, note = Notes.SEL_FAVOURITE) {
                 controller.favouriteSelection(visible)
             }
             Spacer(Modifier.width(6.dp))
-            GhostButton("Edit details", icon = Icons.Default.Edit) {
+            GhostButton("Edit details", icon = Icons.Default.Edit, note = Notes.BULK) {
                 controller.editSelection(visible)
             }
             Spacer(Modifier.width(6.dp))
-            GhostButton("Fix", icon = Icons.Default.AutoFixHigh) {
+            GhostButton("Fix", icon = Icons.Default.AutoFixHigh, note = Notes.SEL_FIX) {
                 controller.fixSelection(visible)
             }
             Spacer(Modifier.width(14.dp))
-            GhostButton("Revert details", icon = Icons.Default.Undo) {
+            GhostButton("Revert details", icon = Icons.Default.Undo, note = Notes.REVERT) {
                 controller.revertToOriginal(controller.selectedTracks(visible))
             }
             Spacer(Modifier.width(6.dp))
-            GhostButton(Platform.showInFolder, icon = Icons.Default.FolderOpen) {
+            GhostButton(Platform.showInFolder, icon = Icons.Default.FolderOpen, note = Notes.SEL_SHOW) {
                 controller.revealSelection(visible)
             }
             Spacer(Modifier.width(6.dp))
-            GhostButton("Zip and ship", icon = Icons.Default.Archive) {
+            GhostButton("Zip and ship", icon = Icons.Default.Archive, note = Notes.ZIP_AND_SHIP) {
                 controller.zipSelection(visible)
             }
             Spacer(Modifier.width(6.dp))
         }
         Spacer(Modifier.width(10.dp))
-        GhostButton("Delete", icon = Icons.Default.Delete) {
+        GhostButton("Delete", icon = Icons.Default.Delete, note = Notes.DELETE) {
             controller.deleteSelection(visible)
         }
         Spacer(Modifier.width(6.dp))
-        GhostButton("Clear") { controller.clearSelection() }
+        GhostButton("Clear", note = Notes.SEL_CLEAR) { controller.clearSelection() }
     }
 }

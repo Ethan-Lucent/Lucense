@@ -54,8 +54,10 @@ library keeps up with new, renamed and deleted files on its own.
 | **A file** | audio *or video* — fingerprinted locally, only frequency peaks leave the machine |
 | **A link** | TikTok, Instagram, YouTube and a thousand more — the audio is fetched, fingerprinted, and thrown away |
 
-Each of Identify's tabs keeps its own box and results while the app is open,
-so switching between them never mixes one search's answers into another.
+Each Identify tab has its own box and results, so one search's answers never
+show up in another. Clicking another tab clears the one you leave, so coming
+back to it later shows it fresh (a search still running there is dropped, not
+shown late).
 
 **Discover** is for finding music you don't have yet: a map of genres to
 wander, in the manner of Every Noise at Once. It's a tab on Android and a page
@@ -335,6 +337,8 @@ file said before anything touched it.
   | M | mute, or put the volume back |
   | S · R | shuffle · repeat (all, one, off) |
   | L | loop: A here, then B here and round, then off |
+  | Ctrl + K | find anything: songs, albums, pages, actions and settings |
+  | Ctrl + V | paste a link to download it, make a playlist from it or identify the song in it |
   | Ctrl + F | the page's search box, from anywhere |
   | Ctrl + A · Esc | select everything in view · clear the selection, or back from an album's page; in a text box, Esc leaves it |
 
@@ -349,11 +353,14 @@ file said before anything touched it.
   default player, so that last step is yours.
 - **Lyrics in their own window** (Windows), which can sit anywhere on screen.
 - **Themes:**
-  - Thirteen published colour schemes: Catppuccin Mocha and Latte, Dracula,
-    Tokyo Night, Rosé Pine, Nord, Gruvbox, Everforest, Solarized dark and light,
-    One Dark, Ayu Mirage and Daylight.
-  - Every scheme is checked for readable contrast.
-  - Android has the same twelve schemes beside its own palettes and Material
+  - Fourteen theme families, each with a dark and a light variant, switched
+    in Settings → Appearance or the command palette: Black (the default),
+    Slate, Ocean and Sunset (built on Radix Colors), and the published
+    Catppuccin, Dracula/Alucard, Tokyo Night, Rosé Pine, Nord, Gruvbox,
+    Everforest, Solarized, One and Ayu.
+  - Every scheme is checked for readable contrast and balanced layers; the
+    sources and numbers are in [docs/THEMES.md](docs/THEMES.md).
+  - Android has its own twelve schemes beside its own palettes and Material
     You. Building your own theme is Windows-only for now.
 - **Colours from the cover:** the theme stays and its accent follows the
   artwork of the song playing, on both apps.

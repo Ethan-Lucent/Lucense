@@ -1,6 +1,7 @@
 package com.exo.musicplayer.desktop.ui
 
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.TweenSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ScrollState
@@ -36,9 +37,31 @@ object Motion {
     /** A panel sliding in or out. */
     const val SLIDE_MS = 220
 
+    /** The window coming back from the tray or a minimise. */
+    const val WINDOW_FADE_IN_MS = 150
+
+    /** The window going - into the tray, or out of the app. Short: someone is waiting for it to be gone. */
+    const val WINDOW_FADE_OUT_MS = 160
+
+    /** Leaving must never depend on an animation: past this the app quits (or hides) regardless. */
+    const val WINDOW_FADE_HARD_TIMEOUT_MS = 400
+
+    /** The start-up screen giving way to the interface, which is already composed underneath it. */
+    const val FIRST_FRAME_FADE_MS = 220
+
+    /**
+     * How long the start-up screen stays once the interface has drawn its first frame - long enough
+     * to be taken in, not so long the app seems to be waiting. (It used to be 1400, counted from
+     * the start of composition, so a slow first frame ate most of it and the rest was dead time.)
+     */
+    const val BOOT_HOLD_MS = 700L
+
     fun <T> quick(): TweenSpec<T> = tween(QUICK_MS, easing = FastOutSlowInEasing)
     fun <T> change(): TweenSpec<T> = tween(CHANGE_MS, easing = FastOutSlowInEasing)
     fun <T> slide(): TweenSpec<T> = tween(SLIDE_MS, easing = FastOutSlowInEasing)
+
+    /** Ease-out: arrives fast, settles gently. */
+    fun <T> firstFrame(): TweenSpec<T> = tween(FIRST_FRAME_FADE_MS, easing = LinearOutSlowInEasing)
 }
 
 /**

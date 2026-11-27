@@ -56,5 +56,19 @@ enum class DownloadQuality(
 
         fun fromName(name: String?): DownloadQuality =
             entries.firstOrNull { it.name == name } ?: DEFAULT
+
+        /**
+         * What a preview plays: a small audio stream served as one plain file
+         * (https), up to about 130 kbps - enough to tell whether it is the
+         * right song. yt-dlp's own order then picks Opus, which ffmpeg opens
+         * in one request (measured: m4a needed more bytes read before the
+         * first sound). Never the segmented kinds (DASH, HLS), which ffmpeg
+         * has to fetch a playlist and piece by piece, and which are what made
+         * a preview slower than a download. The last two alternatives only
+         * matter for a video with nothing else. Downloads don't use it: they
+         * choose from every format yt-dlp read, by [formatSelector].
+         */
+        const val PREVIEW_FORMAT_SELECTOR =
+            "bestaudio[protocol=https][abr<=160]/bestaudio[protocol=https]/bestaudio/best"
     }
 }

@@ -87,7 +87,9 @@ fun IdentifyScreen(controller: DesktopController, onChooseMedia: () -> File?) {
                     options = IdentifyMode.entries,
                     selected = mode,
                     label = { it.label },
-                    onSelect = { controller.identifyMode = it }
+                    // The tab bar clears the tab you leave; other code that changes
+                    // identifyMode is carrying text across and must not.
+                    onSelect = { controller.switchIdentifyTab(it) }
                 )
             }
             Spacer(Modifier.height(6.dp))
@@ -247,7 +249,7 @@ fun IdentifyScreen(controller: DesktopController, onChooseMedia: () -> File?) {
             } else {
                 // Riff's streaming: the whole list, online, one after another.
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    GhostButton("Stream all ${controller.youtubeResults.size}", icon = Icons.Default.PlayCircle) {
+                    GhostButton("Stream all ${controller.youtubeResults.size}", icon = Icons.Default.PlayCircle, note = Notes.ID_STREAM_ALL) {
                         controller.stream(StreamQueue.ofVideos("YouTube: ${controller.youtubeQuery}", controller.youtubeResults))
                     }
                     Spacer(Modifier.width(10.dp))
@@ -441,9 +443,9 @@ private fun MatchRow(
 
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             if (target != null) {
-                AccentButton("Use this") { onApply() }
+                AccentButton("Use this", note = Notes.ID_USE) { onApply() }
             } else {
-                GhostButton("Search this") { onUseAsQuery() }
+                GhostButton("Search this", note = Notes.ID_SEARCH) { onUseAsQuery() }
             }
             if (match.drmProtected) {
                 // Its audio is encrypted and there is no file to fetch. Saying
@@ -454,7 +456,7 @@ private fun MatchRow(
                     color = Palette.TextFaint
                 )
             } else {
-                GhostButton("Download", icon = Icons.Default.Download) { onDownload() }
+                GhostButton("Download", icon = Icons.Default.Download, note = Notes.ID_DOWNLOAD) { onDownload() }
             }
         }
     }
@@ -477,7 +479,7 @@ private fun ProviderBadge(match: MusicMatch) {
         Text(
             if (fingerprinted) "Shazam" else match.provider.ifBlank { "Search" },
             style = MaterialTheme.typography.labelSmall,
-            color = if (fingerprinted) Color(0xFFEFE6FF) else Palette.TextDim
+            color = if (fingerprinted) ThemeColors.readableOn(Palette.AccentSoft, Palette.colors) else Palette.TextDim
         )
     }
 }

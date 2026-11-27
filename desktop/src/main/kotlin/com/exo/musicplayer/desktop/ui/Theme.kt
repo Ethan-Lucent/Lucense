@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
@@ -39,15 +40,15 @@ object Palette {
      * surface and text tones were chosen together, and the contrast of every
      * pairing is measured rather than assumed.
      */
-    private val chosen = mutableStateOf(AccentChoice.MOCHA)
-    private val scheme = mutableStateOf(AccentChoice.MOCHA.colors)
-    private val customScheme = mutableStateOf(AccentChoice.MOCHA.colors)
+    private val chosen = mutableStateOf(AccentChoice.DEFAULT)
+    private val scheme = mutableStateOf(AccentChoice.DEFAULT.colors)
+    private val customScheme = mutableStateOf(AccentChoice.CUSTOM.colors)
 
     /** The accent taken from the song's cover, laid over the theme; null for the theme's own. */
     private val coverAccent = mutableStateOf<Color?>(null)
 
     /** The theme with the cover's accent over it, when there is one: what every getter reads. */
-    private val shown = mutableStateOf(AccentChoice.MOCHA.colors)
+    private val shown = mutableStateOf(AccentChoice.DEFAULT.colors)
     private val starsOverride = mutableStateOf<Color?>(null)
     private val lyricsActiveOverride = mutableStateOf<Color?>(null)
     private val lyricsInactiveOverride = mutableStateOf<Color?>(null)
@@ -69,6 +70,16 @@ object Palette {
     val Raised: Color get() = shown.value.raised      // transport bar, headers
     val Hover: Color get() = shown.value.hover.let { if (Glass.on) it.copy(alpha = 0.55f) else it }
     val Line: Color get() = shown.value.line
+
+    /** Whether the colours in use are a light theme: the page is pale and the text dark. */
+    val isLight: Boolean get() = shown.value.content.luminance() > 0.5f
+
+    /**
+     * What dims the window behind a dialog. A near-black veil on a dark theme;
+     * on a light one, a lighter veil of the theme's own ink, because an 80%
+     * black sheet over a white window reads as the app going dark.
+     */
+    val Scrim: Color get() = if (isLight) shown.value.text.copy(alpha = 0.38f) else Color(0xCC07050C)
 
     val Text: Color get() = shown.value.text
     val TextDim: Color get() = shown.value.textDim
@@ -97,7 +108,12 @@ object Palette {
     val Button: Color get() = shown.value.button
 
     /** Foreground for anything sitting on [Button]. */
-    val OnButton: Color get() = ThemeColors.readableOn(shown.value.button, shown.value)
+    val OnButton: Color
+        get() {
+            // The theme's own tone when it reads; on a mid-tone button neither may, and then plain ink.
+            val own = ThemeColors.readableOn(shown.value.button, shown.value)
+            return if (ThemeColors.contrast(own, shown.value.button) >= 4.5f) own else ThemeColors.contrastingWith(shown.value.button)
+        }
 
     /** The background effect's colour: the user's own pick, or the accent. */
     val Stars: Color get() = starsOverride.value ?: shown.value.accent
@@ -176,7 +192,7 @@ data class ThemeColors(
         soft = lerp(accent, content, 0.45f),
         selected = lerp(accent, content, 0.82f),
         onAccent = contrastingWith(accent),
-        button = lerp(accent, content, 0.38f)
+        button = buttonFill(accent, content)
     )
 
     companion object {
@@ -255,7 +271,7 @@ data class ThemeColors(
             soft = lerp(accent, content, 0.45f),
             selected = lerp(accent, content, 0.82f),
             onAccent = contrastingWith(accent),
-            button = lerp(accent, content, 0.38f),
+            button = buttonFill(accent, content),
             base = base,
             sidebar = sidebar,
             content = content,
@@ -267,27 +283,70 @@ data class ThemeColors(
             textFaint = textFaint
         )
 
-        /** Near-black or near-white, whichever stands out on [colour]. */
-        fun contrastingWith(colour: Color): Color =
-            if (colour.luminance() > 0.32f) Color(0xFF10101A) else Color(0xFFF6F6FB)
+        /**
+         * Near-black or near-white, whichever stands out more on [colour]. Measured
+         * rather than a fixed brightness cut-off: the old cut-off put white on
+         * mid-tone accents where black reads better.
+         */
+        fun contrastingWith(colour: Color): Color {
+            val dark = Color(0xFF10101A)
+            val light = Color(0xFFF6F6FB)
+            return if (contrast(dark, colour) >= contrast(light, colour)) dark else light
+        }
 
-        /** The theme's own darkest or brightest tone, whichever reads on [colour]. */
+        /**
+         * A main button's resting fill: the accent mixed 38% of the way to the
+         * page, unless that lands on a mid tone no label reads on (black and
+         * white both under 4.5:1) - then it stays nearer the accent, which
+         * always carries its own label.
+         */
+        fun buttonFill(accent: Color, content: Color): Color {
+            var towardPage = 0.38f
+            var fill = lerp(accent, content, towardPage)
+            while (towardPage > 0f && contrast(contrastingWith(fill), fill) < 4.5f) {
+                towardPage -= 0.02f
+                fill = lerp(accent, content, towardPage.coerceAtLeast(0f))
+            }
+            return fill
+        }
+
+        /** The WCAG contrast ratio of two colours, 1 to 21. */
+        fun contrast(a: Color, b: Color): Float {
+            val la = a.luminance()
+            val lb = b.luminance()
+            return (maxOf(la, lb) + 0.05f) / (minOf(la, lb) + 0.05f)
+        }
+
+        /**
+         * The theme's base or its text tone, whichever reads better on [colour].
+         * Measured, because on a light theme the base is the pale one.
+         */
         fun readableOn(colour: Color, scheme: ThemeColors): Color =
-            if (colour.luminance() > 0.32f) scheme.base else scheme.text
+            if (contrast(scheme.base, colour) > contrast(scheme.text, colour)) scheme.base else scheme.text
     }
 }
 
 /**
  * The colour themes.
  *
- * Each is a published scheme rather than a hue this app invented: the people
- * who made them picked the surface and text tones against each other, which is
- * what keeps text readable at every layer. Purple still leads, because that is
- * what Lucense has always been. Custom takes its colours from the editor; the
- * values here are only where it starts.
+ * Every theme is one variant of a family: each family has a dark and a light
+ * one, so the mode can change without the look changing character (Custom is
+ * a family of one). Most are published schemes, mapped role by role from the
+ * scheme's own surface and text hierarchy; Black, Slate, Ocean and Sunset are
+ * built on Radix Colors' 12-step scales. Where a published tone missed a
+ * readability or balance rule it was moved the least it takes, and every such
+ * move is listed in docs/THEMES.md; ThemeBalanceTest measures them all.
+ *
+ * The enum names are what is saved in the settings, so they never change: an
+ * old saved name still finds its theme (or, if it never was one, Mocha, which
+ * is what such a name has always shown).
  */
 enum class AccentChoice(
     val label: String,
+    /** The family this is a variant of; it names the swatch. */
+    val family: String,
+    /** The light variant of its family, rather than the dark one. */
+    val light: Boolean,
     /** Where the scheme comes from, shown under the swatches. */
     val credit: String,
     val accent: Color,
@@ -301,92 +360,207 @@ enum class AccentChoice(
     private val textDim: Color,
     private val textFaint: Color
 ) {
+    BLACK(
+        "Black", "Black", false, "Lucense Black: Radix gray and violet · radix-ui.com/colors",
+        Color(0xFFBAA7FF),
+        Color(0xFF000000), Color(0xFF0A0A0A), Color(0xFF111111), Color(0xFF191919),
+        Color(0xFF222222), Color(0xFF3A3A3A),
+        Color(0xFFEEEEEE), Color(0xFFB4B4B4), Color(0xFF7D7D7D)
+    ),
+    WHITE(
+        "White", "Black", true, "Lucense White: Radix gray and violet · radix-ui.com/colors",
+        Color(0xFF6550B9),
+        Color(0xFFF0F0F0), Color(0xFFF9F9F9), Color(0xFFFFFFFF), Color(0xFFF0F0F0),
+        Color(0xFFE8E8E8), Color(0xFFD9D9D9),
+        Color(0xFF202020), Color(0xFF626262), Color(0xFF757575)
+    ),
+    SLATE(
+        "Slate", "Slate", false, "Radix slate and blue · radix-ui.com/colors",
+        Color(0xFF70B8FF),
+        Color(0xFF111113), Color(0xFF18191B), Color(0xFF18191B), Color(0xFF212225),
+        Color(0xFF272A2D), Color(0xFF363A3F),
+        Color(0xFFEDEEF0), Color(0xFFB0B4BA), Color(0xFF7E828B)
+    ),
+    SLATE_LIGHT(
+        "Slate Light", "Slate", true, "Radix slate and blue · radix-ui.com/colors",
+        Color(0xFF0772CB),
+        Color(0xFFF0F0F3), Color(0xFFF9F9FB), Color(0xFFFCFCFD), Color(0xFFF0F0F3),
+        Color(0xFFE8E8EC), Color(0xFFD9D9E0),
+        Color(0xFF1C2024), Color(0xFF5D6169), Color(0xFF71747D)
+    ),
+    OCEAN(
+        "Ocean", "Ocean", false, "Radix cyan over a slate ladder · radix-ui.com/colors",
+        Color(0xFF4CCCE6),
+        Color(0xFF0B161A), Color(0xFF101B20), Color(0xFF101B20), Color(0xFF17242B),
+        Color(0xFF1E2C32), Color(0xFF2E3C43),
+        Color(0xFFE0F1FA), Color(0xFFA6B7BF), Color(0xFF74858C)
+    ),
+    OCEAN_LIGHT(
+        "Ocean Light", "Ocean", true, "Radix cyan over a slate ladder · radix-ui.com/colors",
+        Color(0xFF087A95),
+        Color(0xFFE6F3F5), Color(0xFFF2FAFB), Color(0xFFFAFDFE), Color(0xFFE6F3F5),
+        Color(0xFFDEEBED), Color(0xFFD0DDDE),
+        Color(0xFF0D3C48), Color(0xFF586365), Color(0xFF6A7677)
+    ),
+    SUNSET(
+        "Sunset", "Sunset", false, "Radix orange over a sand ladder · radix-ui.com/colors",
+        Color(0xFFFFA057),
+        Color(0xFF17120E), Color(0xFF1E160F), Color(0xFF1E160F), Color(0xFF28201A),
+        Color(0xFF302822), Color(0xFF403832),
+        Color(0xFFF6ECE3), Color(0xFFBBB1A9), Color(0xFF897F77)
+    ),
+    SUNSET_LIGHT(
+        "Sunset Light", "Sunset", true, "Radix orange over a sand ladder · radix-ui.com/colors",
+        Color(0xFFC14A03),
+        Color(0xFFF7EFE5), Color(0xFFFFF7ED), Color(0xFFFEFCFB), Color(0xFFF7EFE5),
+        Color(0xFFEFE7DD), Color(0xFFE0D8CE),
+        Color(0xFF251F18), Color(0xFF676058), Color(0xFF7B736A)
+    ),
     MOCHA(
-        "Mocha", "Catppuccin Mocha", Color(0xFFCBA6F7),
-        Color(0xFF11111B), Color(0xFF181825), Color(0xFF1E1E2E), Color(0xFF313244),
-        Color(0xFF45475A), Color(0xFF585B70),
+        "Mocha", "Catppuccin", false, "Catppuccin Mocha · github.com/catppuccin/palette",
+        Color(0xFFCBA6F7),
+        Color(0xFF11111B), Color(0xFF181825), Color(0xFF1E1E2E), Color(0xFF303042),
+        Color(0xFF424456), Color(0xFF54576B),
         Color(0xFFCDD6F4), Color(0xFFBAC2DE), Color(0xFFA6ADC8)
     ),
+    LATTE(
+        "Latte", "Catppuccin", true, "Catppuccin Latte · github.com/catppuccin/palette",
+        Color(0xFF8250D4),
+        Color(0xFFDCE0E8), Color(0xFFE6E9EF), Color(0xFFEFF1F5), Color(0xFFE6E9EF),
+        Color(0xFFDCE0E8), Color(0xFFCCD0DA),
+        Color(0xFF42455F), Color(0xFF565971), Color(0xFF696C82)
+    ),
     DRACULA(
-        "Dracula", "Dracula", Color(0xFFBD93F9),
-        Color(0xFF1E1F29), Color(0xFF242531), Color(0xFF282A36), Color(0xFF343746),
-        Color(0xFF44475A), Color(0xFF525569),
-        Color(0xFFF8F8F2), Color(0xFFD5D6E0), Color(0xFFA8AEC8)
+        "Dracula", "Dracula", false, "Dracula · draculatheme.com/spec",
+        Color(0xFFBD93F9),
+        Color(0xFF191A21), Color(0xFF21222C), Color(0xFF282A36), Color(0xFF343746),
+        Color(0xFF424450), Color(0xFF44475A),
+        Color(0xFFF8F8F2), Color(0xFFCBD0DB), Color(0xFF7F91C5)
+    ),
+    ALUCARD(
+        "Alucard", "Dracula", true, "Alucard, Dracula's light · draculatheme.com/spec",
+        Color(0xFF644AC9),
+        Color(0xFFDEDCCF), Color(0xFFECE9DF), Color(0xFFFFFBEB), Color(0xFFEFEDDC),
+        Color(0xFFDEDCCF), Color(0xFFCECCC0),
+        Color(0xFF1F1F1F), Color(0xFF4D4A39), Color(0xFF6C664B)
     ),
     TOKYO(
-        "Tokyo", "Tokyo Night", Color(0xFF7AA2F7),
-        Color(0xFF16161E), Color(0xFF1A1B26), Color(0xFF1F2130), Color(0xFF292E42),
-        Color(0xFF343A52), Color(0xFF3B4261),
-        Color(0xFFC0CAF5), Color(0xFFA9B1D6), Color(0xFF8A93B8)
+        "Tokyo Night", "Tokyo Night", false, "Tokyo Night · github.com/folke/tokyonight.nvim",
+        Color(0xFF7AA2F7),
+        Color(0xFF0C0E14), Color(0xFF16161E), Color(0xFF1A1B26), Color(0xFF282D40),
+        Color(0xFF3A4056), Color(0xFF434960),
+        Color(0xFFC0CAF5), Color(0xFFA9B1D6), Color(0xFF7B82AA)
+    ),
+    TOKYO_DAY(
+        "Tokyo Day", "Tokyo Night", true, "Tokyo Night Light · github.com/enkia/tokyo-night-vscode-theme",
+        Color(0xFF2959AA),
+        Color(0xFFD6D8DF), Color(0xFFD6D8DF), Color(0xFFE6E7ED), Color(0xFFE0E0E6),
+        Color(0xFFD6D8DF), Color(0xFFC1C2C7),
+        Color(0xFF343B59), Color(0xFF4F5369), Color(0xFF646674)
     ),
     ROSE(
-        "Rosé", "Rosé Pine", Color(0xFFC4A7E7),
-        Color(0xFF16141F), Color(0xFF191724), Color(0xFF1F1D2E), Color(0xFF26233A),
-        Color(0xFF302C4A), Color(0xFF403C5C),
-        Color(0xFFE0DEF4), Color(0xFFC7C4DE), Color(0xFF9E9ABA)
+        "Rosé Pine", "Rosé Pine", false, "Rosé Pine · rosepinetheme.com/palette",
+        Color(0xFFC4A7E7),
+        Color(0xFF191724), Color(0xFF1F1D2E), Color(0xFF1F1D2E), Color(0xFF262339),
+        Color(0xFF39364A), Color(0xFF524F67),
+        Color(0xFFE0DEF4), Color(0xFF9E9AB9), Color(0xFF8884A1)
+    ),
+    DAWN(
+        "Rosé Pine Dawn", "Rosé Pine", true, "Rosé Pine Dawn · rosepinetheme.com/palette",
+        Color(0xFF907AA9),
+        Color(0xFFF2E9E1), Color(0xFFFAF4ED), Color(0xFFFFFAF3), Color(0xFFF4EDE8),
+        Color(0xFFDFDAD9), Color(0xFFCECACD),
+        Color(0xFF464261), Color(0xFF605C79), Color(0xFF757182)
     ),
     NORD(
-        "Nord", "Nord", Color(0xFF88C0D0),
-        Color(0xFF272C36), Color(0xFF2E3440), Color(0xFF333B4A), Color(0xFF3B4252),
+        "Nord", "Nord", false, "Nord: Polar Night and Frost · nordtheme.com",
+        Color(0xFF88C0D0),
+        Color(0xFF282E39), Color(0xFF2E3440), Color(0xFF2E3440), Color(0xFF3B4252),
         Color(0xFF434C5E), Color(0xFF4C566A),
-        Color(0xFFECEFF4), Color(0xFFD8DEE9), Color(0xFFAEB8C8)
+        Color(0xFFECEFF4), Color(0xFFD8DEE9), Color(0xFF8F9DB8)
+    ),
+    SNOW(
+        "Snow Storm", "Nord", true, "Nord: Snow Storm and Frost · nordtheme.com",
+        Color(0xFF5C7FAA),
+        Color(0xFFD8DEE9), Color(0xFFE5E9F0), Color(0xFFECEFF4), Color(0xFFE5E8F0),
+        Color(0xFFD8DEE9), Color(0xFFCED3DE),
+        Color(0xFF2E3440), Color(0xFF4C566A), Color(0xFF5F6C86)
     ),
     GRUVBOX(
-        "Gruvbox", "Gruvbox dark", Color(0xFFFABD2F),
-        Color(0xFF1D2021), Color(0xFF232728), Color(0xFF282828), Color(0xFF32302F),
+        "Gruvbox", "Gruvbox", false, "Gruvbox dark · github.com/morhetz/gruvbox",
+        Color(0xFFFABD2F),
+        Color(0xFF1D2021), Color(0xFF282828), Color(0xFF282828), Color(0xFF32302F),
         Color(0xFF3C3836), Color(0xFF504945),
         Color(0xFFFBF1C7), Color(0xFFEBDBB2), Color(0xFFBDAE93)
     ),
-    // Everforest's darker background variants, so its softer foreground still
-    // clears the contrast target with room to spare.
+    GRUVBOX_LIGHT(
+        "Gruvbox Light", "Gruvbox", true, "Gruvbox light · github.com/morhetz/gruvbox",
+        Color(0xFFB07108),
+        Color(0xFFE6DBC0), Color(0xFFEEE5C9), Color(0xFFF8F1D4), Color(0xFFEEE5C9),
+        Color(0xFFE6DBC0), Color(0xFFD1C4AA),
+        Color(0xFF3C3836), Color(0xFF504945), Color(0xFF786B60)
+    ),
     FOREST(
-        "Everforest", "Everforest dark", Color(0xFFA7C080),
-        Color(0xFF1E2326), Color(0xFF272E33), Color(0xFF2D353B), Color(0xFF343F44),
-        Color(0xFF3D484D), Color(0xFF4F585E),
-        Color(0xFFD3C6AA), Color(0xFFBEC5AE), Color(0xFF9DA9A0)
+        "Everforest", "Everforest", false, "Everforest dark, hard · github.com/sainnhe/everforest",
+        Color(0xFFA7C080),
+        Color(0xFF1E2326), Color(0xFF272E33), Color(0xFF272E33), Color(0xFF2E383C),
+        Color(0xFF374145), Color(0xFF495156),
+        Color(0xFFD3C6AA), Color(0xFFA3AFA6), Color(0xFF8B988F)
+    ),
+    FOREST_LIGHT(
+        "Everforest Light", "Everforest", true, "Everforest light, hard · github.com/sainnhe/everforest",
+        Color(0xFF7B8D07),
+        Color(0xFFF2EFDF), Color(0xFFF8F5E4), Color(0xFFFFFBEF), Color(0xFFF8F5E4),
+        Color(0xFFEDEADA), Color(0xFFBEC5B2),
+        Color(0xFF445159), Color(0xFF566455), Color(0xFF6B7669)
     ),
     SOLAR(
-        "Solarized", "Solarized dark", Color(0xFF4FA3DB),
-        Color(0xFF002B36), Color(0xFF04303B), Color(0xFF073642), Color(0xFF0E4451),
-        Color(0xFF17505E), Color(0xFF2C5D68),
-        Color(0xFFFDF6E3), Color(0xFFEEE8D5), Color(0xFFA9B5B5)
-    ),
-    ONEDARK(
-        "One Dark", "One Dark", Color(0xFF61AFEF),
-        Color(0xFF21252B), Color(0xFF23272E), Color(0xFF282C34), Color(0xFF2F343D),
-        Color(0xFF3A3F4B), Color(0xFF474C55),
-        Color(0xFFDCDFE4), Color(0xFFABB2BF), Color(0xFF8B93A1)
-    ),
-    AYU(
-        "Ayu", "Ayu Mirage", Color(0xFFFFCC66),
-        Color(0xFF1A1F29), Color(0xFF1F2430), Color(0xFF242936), Color(0xFF2C3242),
-        Color(0xFF343B4D), Color(0xFF434A5C),
-        Color(0xFFD9D7CF), Color(0xFFC0BEB5), Color(0xFF9AA1AB)
-    ),
-    // The two light ones. The layering runs the other way - the page is the
-    // brightest surface and the chrome sits a shade behind it - and the text
-    // tones are the schemes' own dark ones.
-    LATTE(
-        "Latte", "Catppuccin Latte", Color(0xFF8839EF),
-        Color(0xFFDCE0E8), Color(0xFFE6E9EF), Color(0xFFEFF1F5), Color(0xFFE6E9EF),
-        Color(0xFFCCD0DA), Color(0xFFBCC0CC),
-        // A shade deeper than Latte's own text tone: the scheme's chrome shades
-        // sit darker than its page, and its published text does not clear 7:1
-        // on them.
-        Color(0xFF3C3F54), Color(0xFF5C5F77), Color(0xFF7C7F93)
+        "Solarized", "Solarized", false, "Solarized dark · ethanschoonover.com/solarized",
+        Color(0xFF268BD2),
+        Color(0xFF05252D), Color(0xFF0B2A33), Color(0xFF0B2A33), Color(0xFF17353E),
+        Color(0xFF1D3B44), Color(0xFF4B6167),
+        Color(0xFFEEE8D5), Color(0xFF99A7A7), Color(0xFF839496)
     ),
     DAYLIGHT(
-        "Daylight", "Solarized Light", Color(0xFF1C6FA5),
-        Color(0xFFEEE8D5), Color(0xFFF3EDDC), Color(0xFFFDF6E3), Color(0xFFEEE8D5),
-        Color(0xFFE0D9C0), Color(0xFFCFC8AF),
-        // base02 for the text rather than Solarized's own base00, which is a
-        // deliberately soft grey and does not clear the contrast target.
-        Color(0xFF073642), Color(0xFF3F5B63), Color(0xFF6C7D7D)
+        "Solarized Light", "Solarized", true, "Solarized light · ethanschoonover.com/solarized",
+        Color(0xFF2187CE),
+        Color(0xFFEEE8D5), Color(0xFFEEE8D5), Color(0xFFFDF6E3), Color(0xFFEEE8D5),
+        Color(0xFFE7E2CF), Color(0xFFD2CCB9),
+        Color(0xFF073642), Color(0xFF4C6168), Color(0xFF5E747C)
+    ),
+    ONEDARK(
+        "One Dark", "One", false, "Atom One Dark · github.com/atom/atom (one-dark-syntax)",
+        Color(0xFF61AFEF),
+        Color(0xFF21252B), Color(0xFF21252B), Color(0xFF282C34), Color(0xFF2C323C),
+        Color(0xFF3E4452), Color(0xFF4B5263),
+        Color(0xFFB2B9C6), Color(0xFFA3ABB9), Color(0xFF8C94A2)
+    ),
+    ONELIGHT(
+        "One Light", "One", true, "Atom One Light · github.com/atom/atom (one-light-syntax)",
+        Color(0xFF4078F2),
+        Color(0xFFEAEAEB), Color(0xFFEAEAEB), Color(0xFFFAFAFA), Color(0xFFF0F0F1),
+        Color(0xFFE5E5E6), Color(0xFFDBDBDC),
+        Color(0xFF383A42), Color(0xFF5D5F6A), Color(0xFF717278)
+    ),
+    AYU(
+        "Ayu Mirage", "Ayu", false, "Ayu Mirage · github.com/ayu-theme/ayu-colors",
+        Color(0xFFFFCC66),
+        Color(0xFF181C26), Color(0xFF1F2430), Color(0xFF242936), Color(0xFF282E3B),
+        Color(0xFF343B4C), Color(0xFF3A4150),
+        Color(0xFFCCCAC2), Color(0xFF9CA8BD), Color(0xFF8691A3)
+    ),
+    AYU_LIGHT(
+        "Ayu Light", "Ayu", true, "Ayu Light · github.com/ayu-theme/ayu-colors",
+        Color(0xFFBF7507),
+        Color(0xFFEBEEF0), Color(0xFFF8F9FA), Color(0xFFFCFCFC), Color(0xFFF6F5F6),
+        Color(0xFFEDEFF1), Color(0xFFDCDFE3),
+        Color(0xFF4A4F54), Color(0xFF536175), Color(0xFF6A7585)
     ),
     CUSTOM(
-        "Custom", "Yours", Color(0xFFCBA6F7),
-        Color(0xFF11111B), Color(0xFF181825), Color(0xFF1E1E2E), Color(0xFF313244),
-        Color(0xFF45475A), Color(0xFF585B70),
+        "Custom", "Custom", false, "Yours",
+        Color(0xFFCBA6F7),
+        Color(0xFF11111B), Color(0xFF181825), Color(0xFF1E1E2E), Color(0xFF303042),
+        Color(0xFF424456), Color(0xFF54576B),
         Color(0xFFCDD6F4), Color(0xFFBAC2DE), Color(0xFFA6ADC8)
     );
 
@@ -398,14 +572,63 @@ enum class AccentChoice(
     /** Foreground for anything sitting on this theme's accent. */
     val onAccent: Color get() = ThemeColors.contrastingWith(accent)
 
+    /** The same family's dark or light variant; Custom has only the one. */
+    fun variant(light: Boolean): AccentChoice =
+        if (this.light == light) this else entries.firstOrNull { it.family == family && it.light == light } ?: this
+
+    /** The family this belongs to. */
+    val themeFamily: ThemeFamily get() = families.first { family == it.name }
+
     companion object {
+        /** What a fresh install starts on. */
+        val DEFAULT = BLACK
+
+        /**
+         * What a name that is not a theme has always shown - the old default
+         * "Amethyst" among them - so that nobody's window changes colour on an
+         * update just because their saved name was never a real one.
+         */
+        val SHOWN_FOR_UNKNOWN = MOCHA
+
+        /** Every family, in the order of the swatches. */
+        val families: List<ThemeFamily> by lazy {
+            entries.groupBy { it.family }.map { (name, members) ->
+                ThemeFamily(name, members.first { !it.light }, members.firstOrNull { it.light } ?: members.first())
+            }
+        }
+
         fun fromName(name: String?): AccentChoice =
-            entries.firstOrNull { it.name == name } ?: MOCHA
+            entries.firstOrNull { it.name == name } ?: SHOWN_FOR_UNKNOWN
     }
 }
 
+/** A family of themes: its name and its dark and light variants (the same one for Custom). */
+data class ThemeFamily(val name: String, val dark: AccentChoice, val light: AccentChoice) {
+    /** Whether there is a light and a dark to choose between. */
+    val hasModes: Boolean get() = dark != light
+}
+
 @Composable
-private fun desktopColors() = darkColorScheme(
+// Material's own defaults for the roles not set here (menus, errors) follow the mode too.
+private fun desktopColors() = if (Palette.isLight) lightScheme() else darkScheme()
+
+@Composable
+private fun lightScheme() = lightColorScheme(
+    primary = Palette.Accent,
+    onPrimary = Palette.OnAccent,
+    primaryContainer = Palette.AccentSoft,
+    onPrimaryContainer = Palette.Text,
+    background = Palette.Base,
+    onBackground = Palette.Text,
+    surface = Palette.Content,
+    onSurface = Palette.Text,
+    surfaceVariant = Palette.Raised,
+    onSurfaceVariant = Palette.TextDim,
+    outline = Palette.Line
+)
+
+@Composable
+private fun darkScheme() = darkColorScheme(
     primary = Palette.Accent,
     onPrimary = Palette.OnAccent,
     primaryContainer = Palette.AccentSoft,

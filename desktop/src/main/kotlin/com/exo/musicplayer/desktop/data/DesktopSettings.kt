@@ -1,6 +1,7 @@
 package com.exo.musicplayer.desktop.data
 
 import com.exo.musicplayer.data.ProviderNotes
+import com.exo.musicplayer.desktop.ui.AccentChoice
 import java.io.File
 import java.util.prefs.Preferences
 
@@ -88,9 +89,31 @@ object AppDirs {
 }
 
 /** Small key/value settings, in the Windows registry via java.util.prefs. */
-class DesktopSettings {
-
+class DesktopSettings(
+    // A parameter so a test can use a node of its own instead of the real one.
     private val prefs: Preferences = Preferences.userRoot().node("com/exo/musicplayer")
+) {
+
+    init {
+        // Decided here, before the controller opens the database, so a fresh
+        // install does not see the empty file it is about to create as a library.
+        val hasLibrary = { folders.isNotEmpty() || AppDirs.database.exists() }
+        resolveAdvanced(
+            stored = prefs.get(KEY_ADVANCED_MODE, null),
+            hasLibrary = hasLibrary,
+            save = { prefs.putBoolean(KEY_ADVANCED_MODE, it) }
+        )
+        resolveTipsSeen(
+            stored = prefs.get(KEY_TIPS_SEEN, null),
+            hasLibrary = hasLibrary,
+            save = { prefs.putBoolean(KEY_TIPS_SEEN, it) }
+        )
+        resolveTheme(
+            stored = prefs.get(KEY_ACCENT, null),
+            hasLibrary = hasLibrary,
+            save = { prefs.put(KEY_ACCENT, it) }
+        )
+    }
 
     var folders: List<String>
         get() = prefs.get(KEY_FOLDERS, "").split('|').filter { it.isNotBlank() }
@@ -104,8 +127,9 @@ class DesktopSettings {
         get() = prefs.getFloat(KEY_VOLUME, 0.85f)
         set(value) = prefs.putFloat(KEY_VOLUME, value)
 
+    /** The theme's enum name; always stored by the time anything reads it - see [resolveTheme]. */
     var accentName: String
-        get() = prefs.get(KEY_ACCENT, "Amethyst")
+        get() = prefs.get(KEY_ACCENT, AccentChoice.DEFAULT.name)
         set(value) = prefs.put(KEY_ACCENT, value)
 
     var downloadDir: String
@@ -175,6 +199,15 @@ class DesktopSettings {
         get() = prefs.get(KEY_MINI_PLAYER_AT, "")
         set(value) = prefs.put(KEY_MINI_PLAYER_AT, value)
 
+    /**
+     * Where the Trim window was left, and how big: "x,y,width,height" in the units the
+     * window system uses; empty for beside the main window's side panel. Checked against
+     * the screens before it is used, so a monitor that has gone doesn't strand it.
+     */
+    var trimWindowAt: String
+        get() = prefs.get(KEY_TRIM_WINDOW_AT, "")
+        set(value) = prefs.put(KEY_TRIM_WINDOW_AT, value)
+
     /** Whether the window is drawn as liquid glass. */
     var glass: Boolean
         get() = prefs.getBoolean(KEY_GLASS, false)
@@ -222,11 +255,44 @@ class DesktopSettings {
         get() = prefs.get(KEY_REACTIVE_MODE, "BALL")
         set(value) = prefs.put(KEY_REACTIVE_MODE, value)
 
+    /** Whether the ball shows the playing song's cover, round, in its middle. */
+    var ballCover: Boolean
+        get() = prefs.getBoolean(KEY_BALL_COVER, false)
+        set(value) = prefs.putBoolean(KEY_BALL_COVER, value)
+
     /** The Discord application this shows up as; blank turns it off. */
     /** Whether a song starting shows as a desktop notification (Linux). */
     var notifySongs: Boolean
         get() = prefs.getBoolean(KEY_NOTIFY_SONGS, false)
         set(value) = prefs.putBoolean(KEY_NOTIFY_SONGS, value)
+
+    /** Whether resting the mouse on a menu item or a button shows a short note on it. */
+    var hoverNotes: Boolean
+        get() = prefs.getBoolean(KEY_HOVER_NOTES, true)
+        set(value) = prefs.putBoolean(KEY_HOVER_NOTES, value)
+
+    /**
+     * Whether the extra controls are shown (Settings > Appearance). Always
+     * stored by the time anything reads it - see [resolveAdvanced].
+     */
+    var advancedMode: Boolean
+        get() = prefs.getBoolean(KEY_ADVANCED_MODE, false)
+        set(value) = prefs.putBoolean(KEY_ADVANCED_MODE, value)
+
+    /** Whether the one-time tip at the top of the Library has been dismissed; see [resolveTipsSeen]. */
+    var tipsSeen: Boolean
+        get() = prefs.getBoolean(KEY_TIPS_SEEN, true)
+        set(value) = prefs.putBoolean(KEY_TIPS_SEEN, value)
+
+    /** How big everything is drawn, 1 being the normal size; see [UI_SCALES]. */
+    var uiScale: Float
+        get() = prefs.getFloat(KEY_UI_SCALE, 1f)
+        set(value) = prefs.putFloat(KEY_UI_SCALE, value)
+
+    /** Whether the sidebar's More group is left unfolded. */
+    var railMoreOpen: Boolean
+        get() = prefs.getBoolean(KEY_RAIL_MORE, false)
+        set(value) = prefs.putBoolean(KEY_RAIL_MORE, value)
 
     /** Whether the song's own cover is shown on Discord rather than the app icon. */
     var discordCover: Boolean
@@ -327,7 +393,7 @@ class DesktopSettings {
         set(value) = prefs.putBoolean(KEY_WALLPAPER, value)
 
     var wallpaperDim: Float
-        get() = prefs.getFloat(KEY_WALLPAPER_DIM, 0.55f)
+        get() = prefs.getFloat(KEY_WALLPAPER_DIM, WALLPAPER_DIM_DEFAULT)
         set(value) = prefs.putFloat(KEY_WALLPAPER_DIM, value)
 
     /** ARGB hex for the lyric line being sung, or empty to follow the theme. */
@@ -409,17 +475,24 @@ class DesktopSettings {
         const val KEY_KEEP_IN_TRAY = "keep_in_tray"
         const val KEY_TRAY_MINI_PLAYER = "tray_mini_player"
         const val KEY_MINI_PLAYER_AT = "mini_player_at"
+        const val KEY_TRIM_WINDOW_AT = "trim_window_at"
         const val KEY_DUCK_ENABLED = "duck_enabled"
         const val KEY_DUCK_KEY = "duck_key"
         const val KEY_DUCK_PERCENT = "duck_percent"
         const val KEY_STARS = "starry_background"
         const val KEY_BACKDROP = "backdrop_style"
         const val KEY_REACTIVE_MODE = "reactive_mode"
+        const val KEY_BALL_COVER = "ball_cover"
         const val KEY_SHUFFLE = "shuffle"
         const val KEY_MEDIA_KEYS = "media_keys"
         const val KEY_LEVELLING = "levelling"
         const val KEY_DISCORD_COVER = "discord_cover"
         const val KEY_NOTIFY_SONGS = "notify_songs"
+        const val KEY_HOVER_NOTES = "hover_notes"
+        const val KEY_ADVANCED_MODE = "advanced_mode"
+        const val KEY_RAIL_MORE = "rail_more_open"
+        const val KEY_TIPS_SEEN = "tips_seen"
+        const val KEY_UI_SCALE = "ui_scale"
         const val KEY_CROSSFADE = "crossfade_ms"
         const val KEY_OUTPUT_RATE = "output_rate"
         const val KEY_LIBRARY_SORT = "library_sort"
@@ -452,4 +525,52 @@ class DesktopSettings {
         const val KEY_PROXY_HOST = "proxy_host"
         const val KEY_PROXY_PORT = "proxy_port"
     }
+}
+
+/**
+ * Whether the extra controls start shown. Off for someone new, who should see
+ * a simple app; on for anyone who already has a library, so nobody loses a
+ * button because of an update.
+ */
+internal fun advancedDefault(hasLibrary: Boolean): Boolean = hasLibrary
+
+/**
+ * Whether the first-run tip counts as already seen: yes for anyone who has a
+ * library when this version first runs, who has no use for a welcome.
+ */
+internal fun tipsSeenDefault(hasLibrary: Boolean): Boolean = hasLibrary
+
+/**
+ * The theme a first start settles on. Someone new gets Black. Someone who
+ * already has a library but never picked a theme has been looking at
+ * [shownToday] - what the old default name "Amethyst" fell back to - and keeps
+ * it, so an update does not repaint their window.
+ */
+internal fun themeDefault(hasLibrary: Boolean, shownToday: String): String =
+    if (hasLibrary) shownToday else AccentChoice.DEFAULT.name
+
+/** [resolveAdvanced] for the theme: a stored name is kept as it is; otherwise decided once and saved. */
+internal fun resolveTheme(stored: String?, hasLibrary: () -> Boolean, save: (String) -> Unit): String {
+    if (stored != null) return stored
+    return themeDefault(hasLibrary(), AccentChoice.SHOWN_FOR_UNKNOWN.name).also(save)
+}
+
+/** How far a wallpaper is darkened until the slider is moved. */
+internal const val WALLPAPER_DIM_DEFAULT = 0.55f
+
+/**
+ * The saved choice, or - the first time only - the default, saved on the spot.
+ * Saving it is the point: without it, a new user who adds a music folder
+ * would look like an existing one on the next start and the controls would
+ * appear by themselves. [hasLibrary] is only asked when nothing is saved yet.
+ */
+internal fun resolveAdvanced(stored: String?, hasLibrary: () -> Boolean, save: (Boolean) -> Unit): Boolean {
+    if (stored != null) return stored.toBoolean()
+    return advancedDefault(hasLibrary()).also(save)
+}
+
+/** [resolveAdvanced] for the tip: decided the first time only, and saved on the spot for the same reason. */
+internal fun resolveTipsSeen(stored: String?, hasLibrary: () -> Boolean, save: (Boolean) -> Unit): Boolean {
+    if (stored != null) return stored.toBoolean()
+    return tipsSeenDefault(hasLibrary()).also(save)
 }

@@ -44,8 +44,15 @@ import javax.sound.sampled.SourceDataLine
  *
  * One of these serves every page, so only one preview plays at a time and the
  * small player in the corner can pause or close it from anywhere.
+ *
+ * [volume] is the linear gain to play at right now, asked again for every
+ * buffer, so the slider and the mute button act on a preview at once. Without
+ * it a quiet setting would still play every preview at full scale.
  */
-class PreviewPlayer(private val ffmpegPath: () -> java.io.File) {
+class PreviewPlayer(
+    private val ffmpegPath: () -> java.io.File,
+    private val volume: () -> Float = { 1f },
+) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -269,10 +276,19 @@ class PreviewPlayer(private val ffmpegPath: () -> java.io.File) {
             try {
                 val buffer = ByteArray(format.frameSize * 4096)
                 val bytesPerSecond = format.sampleRate.toInt() * format.frameSize
+                // Where the last buffer ended up, so the next one ramps from
+                // there. Starts at the current level: a new preview has no
+                // earlier level to fade in from.
+                var lastGain = volume().coerceAtLeast(0f)
 
                 while (true) {
                     val read = started.inputStream.read(buffer)
                     if (read <= 0) break
+                    // Scaled once, before the write loop below, so a short write
+                    // that is offered again is offered the same scaled bytes.
+                    val gain = volume().coerceAtLeast(0f)
+                    scalePcm16(buffer, read, gain, lastGain)
+                    lastGain = gain
                     // A stopped line doesn't block a write, it returns short:
                     // left to itself the rest of the clip would be read and
                     // thrown away in a second. So a pause is waited out here,
@@ -362,5 +378,40 @@ class PreviewPlayer(private val ffmpegPath: () -> java.io.File) {
     fun release() {
         stop()
         runCatching { scope.coroutineContext[Job]?.cancel() }
+    }
+}
+
+/**
+ * The gain [frame] of [frames] of the way from [from] to [to]: a straight line,
+ * so a change in level is spread over a buffer instead of landing as a step,
+ * which is what a click is.
+ */
+internal fun rampGain(from: Float, to: Float, frame: Int, frames: Int): Float =
+    if (frames <= 1) to else from + (to - from) * ((frame + 1).toFloat() / frames)
+
+/**
+ * Multiplies 16-bit little-endian stereo PCM in [buffer] by [gain], in place.
+ *
+ * Only the first [length] bytes are touched; the rest of the buffer is left from
+ * an earlier read and is not part of the audio. A trailing half sample is left
+ * alone. Results are clamped, since a gain above one could otherwise wrap round
+ * from loud to the opposite extreme, which is a crack. With [fromGain] given the
+ * gain slides from that to [gain] across the buffer, one step per frame, both
+ * channels together. A gain that stays at exactly one costs nothing.
+ */
+internal fun scalePcm16(buffer: ByteArray, length: Int, gain: Float, fromGain: Float = gain) {
+    if (gain == 1f && fromGain == 1f) return
+    val bytes = length.coerceIn(0, buffer.size)
+    val samples = bytes / 2
+    val frames = (samples + 1) / 2
+    var i = 0
+    while (i < samples) {
+        val g = if (fromGain == gain) gain else rampGain(fromGain, gain, i / 2, frames)
+        val at = i * 2
+        val value = (buffer[at].toInt() and 0xFF) or (buffer[at + 1].toInt() shl 8)
+        val scaled = Math.round(value * g).coerceIn(-32768, 32767)
+        buffer[at] = scaled.toByte()
+        buffer[at + 1] = (scaled shr 8).toByte()
+        i++
     }
 }

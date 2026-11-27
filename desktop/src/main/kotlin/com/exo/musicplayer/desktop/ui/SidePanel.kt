@@ -239,26 +239,11 @@ fun SidePanel(
                     fx = controller.fx,
                     spectrum = controller.engine.spectrum,
                     playing = nowPlaying.playing,
+                    remembered = controller.fxRemembered,
+                    onRemember = { controller.rememberFxForCurrent() },
+                    onForget = { controller.forgetFxForCurrent() },
                     onFx = { controller.fx = it }
                 )
-                Spacer(Modifier.height(18.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (controller.fxRemembered) {
-                            "Saved against this song"
-                        } else {
-                            "These apply to everything"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (controller.fxRemembered) Palette.Accent else Palette.TextFaint,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (controller.fxRemembered) {
-                        GhostButton("Forget") { controller.forgetFxForCurrent() }
-                    } else {
-                        GhostButton("Remember for this song") { controller.rememberFxForCurrent() }
-                    }
-                }
             }
             SidePanelKind.OUTPUT -> OutputControls(
                 controller.outputs,
@@ -272,16 +257,37 @@ fun SidePanel(
     }
 }
 
+/** Whether the equaliser or any of the character effects is doing something. */
+private fun extrasActive(fx: DesktopFxState): Boolean =
+    fx.eqEnabled || listOf(fx.drive, fx.lofi, fx.tremolo, fx.rotate, fx.echo).any { CharacterFx.on(it) }
+
+/**
+ * Whether "Fine-tune" starts open. It is folded away to keep the panel simple,
+ * but never over something that is on: the sound would have a cause the user
+ * cannot see. Always open for someone who asked for the advanced controls.
+ */
+internal fun fineTuneOpen(state: DesktopFxState, advanced: Boolean): Boolean =
+    advanced || state.reverbEnabled || extrasActive(state)
+
+/**
+ * The one line that says what the sound is doing: the preset the sliders match,
+ * "Custom" when they match none, and "+ tweaks" when fine-tune effects sit on top.
+ */
+internal fun fxSummary(fx: DesktopFxState): String {
+    val preset = EffectPreset.entries.firstOrNull { fx.matches(it) } ?: return "Custom"
+    return if (extrasActive(fx)) "${preset.label} + tweaks" else preset.label
+}
+
 @Composable
 private fun EffectsControls(
     fx: DesktopFxState,
     spectrum: SpectrumAnalyser,
     playing: Boolean,
+    remembered: Boolean,
+    onRemember: () -> Unit,
+    onForget: () -> Unit,
     onFx: (DesktopFxState) -> Unit
 ) {
-    Spectrum(spectrum, playing)
-
-    Spacer(Modifier.height(18.dp))
     Text(
         "PRESETS",
         style = MaterialTheme.typography.labelSmall,
@@ -297,16 +303,32 @@ private fun EffectsControls(
         // "Slowed + reverb" on two lines in a narrow panel.
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             presets.forEach { preset ->
-                Preset(preset.label, fx.matches(preset)) { onFx(fx.applying(preset)) }
+                Noted(null, preset.note) {
+                    Preset(preset.label, fx.matches(preset)) { onFx(fx.applying(preset)) }
+                }
             }
         }
     }
+    Spacer(Modifier.height(10.dp))
+    Readout("Sound", fxSummary(fx), presets.firstOrNull { fx.matches(it) }?.note ?: "your own settings")
     Spacer(Modifier.height(6.dp))
     Text(
-        presets.firstOrNull { fx.matches(it) }?.note ?: "Custom",
+        if (remembered) "Saved against this song" else "These apply to everything",
         style = MaterialTheme.typography.labelSmall,
-        color = Palette.TextFaint
+        color = if (remembered) Palette.Accent else Palette.TextFaint
     )
+    Spacer(Modifier.height(6.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (remembered) {
+            GhostButton("Forget", note = Notes.FX_FORGET) { onForget() }
+        } else {
+            GhostButton("Remember for this song", note = Notes.FX_REMEMBER) { onRemember() }
+        }
+        if (!fx.isDefault) {
+            Spacer(Modifier.width(8.dp))
+            GhostButton("Clear", note = Notes.FX_CLEAR) { onFx(DesktopFxState()) }
+        }
+    }
 
     Spacer(Modifier.height(20.dp))
     Readout("Speed", "%.2f×".format(fx.speed), "this slider moves tempo alone")
@@ -336,7 +358,24 @@ private fun EffectsControls(
         color = Palette.TextFaint
     )
 
-    Spacer(Modifier.height(20.dp))
+    // Speed and pitch are what most people reach for; the rest is folded away,
+    // open whenever something in it is on.
+    Spacer(Modifier.height(14.dp))
+    Collapsible("Fine-tune", startOpen = fineTuneOpen(fx, Advanced.on), note = Notes.FX_FINE_TUNE) {
+        FineTuneControls(fx, onFx)
+    }
+
+    if (Advanced.on) {
+        Spacer(Modifier.height(18.dp))
+        Spectrum(spectrum, playing)
+    }
+    Spacer(Modifier.height(24.dp))
+}
+
+/** Distortion, the character effects, reverb and the equaliser. */
+@Composable
+private fun FineTuneControls(fx: DesktopFxState, onFx: (DesktopFxState) -> Unit) {
+    Spacer(Modifier.height(12.dp))
     Text("Distortion", style = MaterialTheme.typography.titleMedium, color = Palette.Text)
     Readout(
         "Drive",
@@ -433,10 +472,6 @@ private fun EffectsControls(
             color = Palette.Text,
             modifier = Modifier.weight(1f)
         )
-        if (fx.eqEnabled) {
-            GhostButton("Flat") { onFx(fx.copy(eqGains = List(EQ_LABELS.size) { 0f })) }
-            Spacer(Modifier.width(8.dp))
-        }
         Switch(
             checked = fx.eqEnabled,
             onCheckedChange = { onFx(fx.copy(eqEnabled = it)) },
@@ -451,6 +486,16 @@ private fun EffectsControls(
     }
     if (fx.eqEnabled) {
         Spacer(Modifier.height(10.dp))
+        // Selected follows the gains, so dragging a band off a preset deselects it.
+        val current = matchingEqPreset(fx.eqGains)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            EqPreset.entries.forEach { preset ->
+                Noted(null, preset.note) {
+                    Preset(preset.label, current == preset) { onFx(fx.applyingEq(preset)) }
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
         EqualizerBands(fx.eqGains) { band, db ->
             onFx(fx.copy(eqGains = fx.eqGains.toMutableList().also { it[band] = db }))
         }
@@ -463,7 +508,6 @@ private fun EffectsControls(
         )
     }
 
-    Spacer(Modifier.height(24.dp))
 }
 
 /**

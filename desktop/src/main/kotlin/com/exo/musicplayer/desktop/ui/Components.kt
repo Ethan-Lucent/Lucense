@@ -3,6 +3,18 @@ package com.exo.musicplayer.desktop.ui
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -67,6 +79,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -102,6 +115,16 @@ fun AccentButton(
     label: String,
     enabled: Boolean = true,
     icon: ImageVector? = null,
+    /** A line on what it does, shown when the mouse rests on it; see [Noted]. */
+    note: String? = null,
+    onClick: () -> Unit
+) = Noted(null, note) { AccentChip(label, enabled, icon, onClick) }
+
+@Composable
+private fun AccentChip(
+    label: String,
+    enabled: Boolean,
+    icon: ImageVector?,
     onClick: () -> Unit
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -186,52 +209,113 @@ val WINDOW_STEPS = listOf(900.dp, 1000.dp, 1100.dp)
 fun Dp.steppedAt(steps: List<Dp>): Dp = steps.lastOrNull { this >= it } ?: 0.dp
 
 /** A ghost button showing only its [icon], its words in a tooltip: for a page with no room. */
+@Composable
+fun IconGhostButton(
+    label: String,
+    icon: ImageVector,
+    enabled: Boolean = true,
+    /** A line on what it does, under the name in the tooltip; see [Noted]. */
+    note: String? = null,
+    onClick: () -> Unit
+) = Noted(label, note, iconOnly = true) { IconChip(label, icon, enabled, onClick) }
+
+/** [IconGhostButton] without the note, for a control that is wrapped in [Noted] by something else. */
+@Composable
+internal fun IconChip(label: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(
+        Modifier
+            .size(CONTROL_HEIGHT)
+            .then(
+                if (Glass.on) {
+                    Modifier.glassChip(RoundedCornerShape(50), fill = if (hovered && enabled) 0.13f else 0.05f)
+                } else {
+                    Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(hoverFill(hovered && enabled))
+                        .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
+                }
+            )
+            .hoverable(interaction)
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, label, Modifier.size(15.dp), tint = if (enabled) Palette.TextDim else Palette.TextFaint)
+    }
+}
+
+/**
+ * The one hover note for every control: [name] in bold over a [note] in dim
+ * type, in a small bubble once the mouse has rested on [content] for a
+ * moment. What shows follows [noteLines]: with notes switched off a control
+ * that is only an icon ([iconOnly]) still shows its name, and one with a word
+ * on it shows nothing. A null [name] or [note] leaves that line out, so a
+ * button with a visible label gives just a note.
+ *
+ * Wrap the control, not a part of it, so the whole of it is the hover target.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun IconGhostButton(label: String, icon: ImageVector, enabled: Boolean = true, onClick: () -> Unit) {
+fun Noted(name: String?, note: String?, iconOnly: Boolean = false, content: @Composable () -> Unit) {
+    val lines = noteLines(name, note, iconOnly, Notes.on)
+    if (lines.isEmpty()) {
+        content()
+        return
+    }
+    // Whenever there is anything to show, the name - if there is one - comes first.
+    val named = !name.isNullOrBlank()
     TooltipArea(
+        delayMillis = NOTE_DELAY_MS,
         tooltip = {
-            Text(
-                label,
-                style = MaterialTheme.typography.labelMedium,
-                color = Palette.Text,
-                modifier = Modifier
+            Column(
+                Modifier
+                    .widthIn(max = 280.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .background(Palette.Raised)
                     .border(1.dp, Palette.Line, RoundedCornerShape(6.dp))
                     .padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-        }
-    ) {
-        val interaction = remember { MutableInteractionSource() }
-        val hovered by interaction.collectIsHoveredAsState()
-        Box(
-            Modifier
-                .size(CONTROL_HEIGHT)
-                .then(
-                    if (Glass.on) {
-                        Modifier.glassChip(RoundedCornerShape(50), fill = if (hovered && enabled) 0.13f else 0.05f)
+            ) {
+                lines.forEachIndexed { i, line ->
+                    if (named && i == 0) {
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Palette.Text
+                        )
                     } else {
-                        Modifier
-                            .clip(RoundedCornerShape(7.dp))
-                            .background(hoverFill(hovered && enabled))
-                            .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (named) Palette.TextDim else Palette.Text
+                        )
                     }
-                )
-                .hoverable(interaction)
-                .clickable(enabled = enabled) { onClick() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(icon, label, Modifier.size(15.dp), tint = if (enabled) Palette.TextDim else Palette.TextFaint)
-        }
-    }
+                }
+            }
+        },
+        content = content
+    )
 }
+
+/** How long the mouse rests before a note shows; the same as a menu row's. */
+private const val NOTE_DELAY_MS = 600
 
 @Composable
 fun GhostButton(
     label: String,
     enabled: Boolean = true,
     icon: ImageVector? = null,
+    /** A line on what it does, shown when the mouse rests on it; see [Noted]. */
+    note: String? = null,
+    onClick: () -> Unit
+) = Noted(null, note) { GhostChip(label, enabled, icon, onClick) }
+
+@Composable
+private fun GhostChip(
+    label: String,
+    enabled: Boolean,
+    icon: ImageVector?,
     onClick: () -> Unit
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -303,6 +387,65 @@ fun SectionTitle(text: String, trailing: (@Composable () -> Unit)? = null) {
             modifier = Modifier.weight(1f)
         )
         trailing?.invoke()
+    }
+}
+
+/**
+ * A section whose [content] is tucked under its [title] until the title is
+ * clicked: for what most people never need, so the page stays short. Opens
+ * and closes in 140 ms, as the seek ball's does. Whether it is open is
+ * remembered across the page being left and come back to. The title takes
+ * the keyboard's focus; Enter or Space opens and closes it.
+ */
+@Composable
+fun Collapsible(
+    title: String,
+    startOpen: Boolean = false,
+    note: String? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var open by rememberSaveable(title) { mutableStateOf(startOpen) }
+    val turn by animateFloatAsState(if (open) 90f else 0f, tween(140), label = "collapsible chevron")
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        Noted(null, note) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(hoverFill(hovered || focused))
+                    .hoverable(interaction)
+                    .onFocusChanged { focused = it.isFocused }
+                    // Ahead of the click handling, which would otherwise take Enter too and toggle twice.
+                    .onPreviewKeyEvent { event ->
+                        val pressed = event.type == KeyEventType.KeyDown &&
+                            (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Spacebar)
+                        if (pressed) open = !open
+                        pressed
+                    }
+                    .clickable(role = Role.Button) { open = !open }
+                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.ChevronRight,
+                    null,
+                    Modifier.size(20.dp).rotate(turn),
+                    tint = Palette.TextDim
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium, color = Palette.Text)
+            }
+        }
+        AnimatedVisibility(
+            visible = open,
+            enter = expandVertically(tween(140)) + fadeIn(tween(140)),
+            exit = shrinkVertically(tween(140)) + fadeOut(tween(140))
+        ) {
+            Column(Modifier.fillMaxWidth(), content = content)
+        }
     }
 }
 
@@ -567,56 +710,6 @@ fun CheckRow(
     }
 }
 
-/** Segmented row of choices — the desktop idiom for a small enum. */
-@Composable
-fun <T> SegmentedRow(
-    options: List<T>,
-    selected: T,
-    label: (T) -> String,
-    onSelect: (T) -> Unit
-) {
-    Row(
-        Modifier
-            .then(
-                if (Glass.on) {
-                    Modifier.glassChip(RoundedCornerShape(50), fill = 0.04f)
-                } else {
-                    Modifier
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(Palette.Content)
-                        .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
-                }
-            )
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        options.forEach { option ->
-            val isSelected = option == selected
-            Box(
-                Modifier
-                    .then(
-                        if (Glass.on && isSelected) {
-                            Modifier.glassChip(RoundedCornerShape(50), fill = 0.12f, edge = 1.1f)
-                                .background(Palette.Selected.copy(alpha = 0.55f))
-                        } else {
-                            Modifier.clip(if (Glass.on) RoundedCornerShape(50) else RoundedCornerShape(5.dp))
-                        }
-                    )
-                    .background(if (isSelected && !Glass.on) Palette.Selected else Color.Transparent)
-                    .clickable { onSelect(option) }
-                    .padding(horizontal = 11.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    label(option),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isSelected) Palette.Text else Palette.TextDim
-                )
-            }
-        }
-    }
-}
-
 @Composable
 fun ThinProgress(progress: Float?, modifier: Modifier = Modifier) {
     if (progress == null) {
@@ -753,42 +846,18 @@ fun LineSlider(
                 val inset = SLIDER_INSET.toPx()
                 fun at(x: Float): Float =
                     ((x - inset) / (size.width - 2 * inset).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val buttons = currentEvent.buttons
-                    if (buttons.isSecondaryPressed && !buttons.isPrimaryPressed) return@awaitEachGesture
-                    down.consume()
-                    var last = at(down.position.x)
-                    dragging = last
-                    if (live) latestSet(last)
-                    var released = false
-                    try {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) {
-                                change.consume()
-                                released = true
-                                break
-                            }
-                            val next = at(change.position.x)
-                            if (next != last) {
-                                last = next
-                                dragging = next
-                                if (live) latestSet(next)
-                            }
-                            change.consume()
-                        }
-                    } finally {
-                        // A cancelled gesture sets nothing; only a real release
-                        // commits, and a click with no movement is a release too.
-                        if (released) {
-                            holding = last
-                            latestSet(last)
-                        }
-                        dragging = null
-                    }
-                }
+                followPress(
+                    at = ::at,
+                    onMove = {
+                        dragging = it
+                        if (live) latestSet(it)
+                    },
+                    onRelease = {
+                        holding = it
+                        latestSet(it)
+                    },
+                    onEnd = { dragging = null }
+                )
             }
             .pointerInput(enabled, wheelStep) {
                 if (!enabled || wheelStep <= 0f) return@pointerInput
@@ -824,6 +893,51 @@ fun LineSlider(
     }
 }
 
+/**
+ * One press, followed wherever the mouse goes until the button comes up, well
+ * off the control included: the seek bar's drag, and the rating stars'.
+ *
+ * [at] turns the pointer's x into the control's own value; [onMove] gets the
+ * value under the press and then each time it changes. A cancelled gesture
+ * sets nothing; only a real release reaches [onRelease], and a click with no
+ * movement is a release too. [onEnd] runs last either way. A press of the
+ * secondary button alone is left for the right-click menu.
+ */
+internal suspend fun PointerInputScope.followPress(
+    at: (Float) -> Float,
+    onMove: (Float) -> Unit,
+    onRelease: (Float) -> Unit,
+    onEnd: () -> Unit
+) = awaitEachGesture {
+    val down = awaitFirstDown(requireUnconsumed = false)
+    val buttons = currentEvent.buttons
+    if (buttons.isSecondaryPressed && !buttons.isPrimaryPressed) return@awaitEachGesture
+    down.consume()
+    var last = at(down.position.x)
+    onMove(last)
+    var released = false
+    try {
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) {
+                change.consume()
+                released = true
+                break
+            }
+            val next = at(change.position.x)
+            if (next != last) {
+                last = next
+                onMove(next)
+            }
+            change.consume()
+        }
+    } finally {
+        if (released) onRelease(last)
+        onEnd()
+    }
+}
+
 /** The largest the ball gets, and so how far the travel is kept from the edges. */
 private val SLIDER_INSET = 6.dp
 private val SLIDER_TRACK = 4.dp
@@ -833,5 +947,5 @@ private const val SLIDER_HOLD_MS = 900L
 
 /** A hover's fill, easing in and out rather than snapping. */
 @Composable
-private fun hoverFill(on: Boolean): Color =
+internal fun hoverFill(on: Boolean): Color =
     animateColorAsState(if (on) Palette.Hover else Color.Transparent, Motion.quick(), label = "hover").value

@@ -37,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,8 +52,57 @@ import com.exo.musicplayer.data.download.DownloadFormat
 import com.exo.musicplayer.data.download.DownloadQuality
 import com.exo.musicplayer.desktop.data.DesktopController
 import com.exo.musicplayer.desktop.data.DownloadEntry
+import com.exo.musicplayer.desktop.download.ToolStatus
 import com.exo.musicplayer.desktop.download.YtDlp
+import com.exo.musicplayer.data.download.YouTubeTrouble
 import java.io.File
+
+/** Spotify's caveat, kept with the options and shown under the link box when a Spotify link is pasted. */
+private const val SPOTIFY_NOTE =
+    "YouTube, SoundCloud and Bandcamp download directly. Spotify links go " +
+        "through spotdl, which reads the track, album and artwork from " +
+        "Spotify and then fetches the same recording from YouTube — " +
+        "Spotify's own audio is DRM protected and no tool can download it."
+
+/** What the folded-away options are set to, in a line: "MP3 · High quality · cover art". */
+internal fun optionsSummary(
+    format: DownloadFormat?,
+    quality: DownloadQuality,
+    embedArt: Boolean,
+    cutNonMusic: Boolean,
+    playlist: Boolean
+): String = listOfNotNull(
+    format?.label ?: "As sent",
+    // Lossless formats keep everything, so the quality setting does nothing there.
+    if (format?.lossy == false) "lossless" else "${quality.label} quality",
+    "cover art".takeIf { embedArt },
+    "non-music cut".takeIf { cutNonMusic },
+    "whole playlist".takeIf { playlist }
+).joinToString(" · ")
+
+/** Whether a queue row is YouTube refusing the connection, by what the row says. */
+internal fun refusedByYouTube(entry: DownloadEntry): Boolean =
+    listOfNotNull(entry.status, entry.note).any {
+        YouTubeTrouble.refused(it) || it.contains("YouTube refused") || it.contains("YouTube began refusing")
+    }
+
+/** Whether the most recent finished failure was YouTube refusing: what brings the sign-in forward. */
+internal fun lastFailureRefused(entries: List<DownloadEntry>): Boolean =
+    entries.lastOrNull { it.done && (it.failed || it.note != null) }?.let(::refusedByYouTube) == true
+
+/**
+ * The YouTube sign-in block shows when YouTube just refused, when a sign-in is
+ * already in use (to renew or end it), when the advanced controls are on, or
+ * when the user asked for it from a refused download.
+ */
+internal fun youtubeBlockShown(refused: Boolean, signedIn: Boolean, advanced: Boolean, revealed: Boolean): Boolean =
+    refused || signedIn || advanced || revealed
+
+/** The downloaders block shows for the advanced, and always when a tool is missing: a broken install is never hidden. */
+internal fun downloadersShown(anyProblem: Boolean, advanced: Boolean): Boolean = anyProblem || advanced
+
+private fun anyToolMissing(tools: ToolStatus): Boolean =
+    !tools.ytDlp || !tools.ffmpeg || !tools.spotdl || !tools.jsEngine
 
 /**
  * The download window.
@@ -65,8 +115,25 @@ import java.io.File
  */
 @Composable
 fun DownloadScreen(controller: DesktopController, onChooseFolder: () -> File?) {
-    LaunchedEffect(Unit) { controller.refreshTools() }
+    // Every flag starts false until the first check lands, which would flash
+    // the Downloaders block on a perfectly good install. So a problem only
+    // counts once the check has had a moment (or an earlier visit already
+    // knew); a really broken install still shows it, two seconds late.
+    var toolsSettled by remember { mutableStateOf(controller.tools != ToolStatus()) }
+    LaunchedEffect(Unit) {
+        controller.refreshTools()
+        delay(2_000)
+        toolsSettled = true
+    }
     var showLog by remember { mutableStateOf(false) }
+    var signInRevealed by remember { mutableStateOf(false) }
+    val showDownloaders = downloadersShown(toolsSettled && anyToolMissing(controller.tools), Advanced.on)
+    val showSignIn = youtubeBlockShown(
+        refused = lastFailureRefused(controller.downloads),
+        signedIn = controller.youtubeSignIn != YouTubeSignIn.Source.OFF || controller.signInKeptAt != null,
+        advanced = Advanced.on,
+        revealed = signInRevealed
+    )
 
     Column(
         Modifier
@@ -74,19 +141,15 @@ fun DownloadScreen(controller: DesktopController, onChooseFolder: () -> File?) {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 8.dp)
     ) {
-        ToolsPanel(controller)
-
-        Spacer(Modifier.height(14.dp))
+        if (showDownloaders) {
+            ToolsPanel(controller)
+            Spacer(Modifier.height(14.dp))
+        }
 
         Panel(Modifier.fillMaxWidth()) {
             SectionTitle("Add a link")
             Spacer(Modifier.height(4.dp))
-            Hint(
-                "YouTube, SoundCloud and Bandcamp download directly. Spotify links go " +
-                    "through spotdl, which reads the track, album and artwork from " +
-                    "Spotify and then fetches the same recording from YouTube — " +
-                    "Spotify's own audio is DRM protected and no tool can download it."
-            )
+            Hint("Paste a link from YouTube, SoundCloud, Bandcamp, Spotify and more.")
             Spacer(Modifier.height(12.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -105,64 +168,26 @@ fun DownloadScreen(controller: DesktopController, onChooseFolder: () -> File?) {
                     icon = Icons.Default.Download
                 ) { controller.startDownload() }
             }
-
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("Format", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
-                    Spacer(Modifier.height(6.dp))
-                    SegmentedRow(
-                        options = listOf<DownloadFormat?>(null) + DownloadFormat.entries,
-                        selected = controller.downloadFormat,
-                        label = { it?.label ?: "As sent" },
-                        onSelect = { controller.downloadFormat = it }
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        controller.downloadFormat?.note ?: "whatever the site served, usually Opus, not converted",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Palette.TextFaint
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    CheckRow(
-                        label = "Embed cover art",
-                        checked = controller.downloadEmbedArt,
-                        note = "Cut square from the middle of a video's thumbnail"
-                    ) { controller.downloadEmbedArt = it }
-                    CheckRow(
-                        label = "Cut the non-music parts of music videos",
-                        checked = controller.downloadCutNonMusic,
-                        note = "Spoken intros and skits that SponsorBlock's listeners have marked"
-                    ) { controller.downloadCutNonMusic = it }
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Quality",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Palette.Text
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    SegmentedRow(
-                        options = DownloadQuality.entries,
-                        selected = controller.downloadQuality,
-                        label = { it.label },
-                        onSelect = { controller.downloadQuality = it }
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        if (controller.downloadFormat?.lossy == false) "Doesn't apply to ${controller.downloadFormat?.label}, which keeps everything"
-                        else controller.downloadQuality.description,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Palette.TextFaint
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    CheckRow(
-                        label = "Download the whole playlist",
-                        checked = controller.downloadPlaylist,
-                        note = "Off means just the one track a playlist link points at"
-                    ) { controller.downloadPlaylist = it }
-                }
+            // Spotify is the one link that doesn't do what it looks like, so say so when it is pasted.
+            if (controller.downloadUrl.contains("spotify", ignoreCase = true)) {
+                Spacer(Modifier.height(8.dp))
+                Hint(SPOTIFY_NOTE)
             }
+
+            Spacer(Modifier.height(10.dp))
+            // Format, quality and the ticks are folded away, so the page opens on
+            // the link and the button. The line under the header says what is
+            // chosen, so nothing in there is a surprise.
+            Collapsible("Options", note = Notes.DL_OPTIONS) { OptionsControls(controller) }
+            Text(
+                optionsSummary(
+                    controller.downloadFormat, controller.downloadQuality, controller.downloadEmbedArt,
+                    controller.downloadCutNonMusic, controller.downloadPlaylist
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = Palette.TextFaint,
+                modifier = Modifier.padding(start = 4.dp)
+            )
 
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -186,8 +211,10 @@ fun DownloadScreen(controller: DesktopController, onChooseFolder: () -> File?) {
         }
 
         Spacer(Modifier.height(14.dp))
-        SignInPanel(controller)
-        Spacer(Modifier.height(14.dp))
+        if (showSignIn) {
+            SignInPanel(controller)
+            Spacer(Modifier.height(14.dp))
+        }
 
         if (controller.downloads.isEmpty()) {
             EmptyState(
@@ -199,24 +226,95 @@ fun DownloadScreen(controller: DesktopController, onChooseFolder: () -> File?) {
         } else {
             SectionTitle("Queue") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    GhostButton(if (showLog) "Hide log" else "Show log") { showLog = !showLog }
-                    Spacer(Modifier.width(8.dp))
+                    if (showDownloaders) {
+                        GhostButton(if (showLog) "Hide log" else "Show log") { showLog = !showLog }
+                        Spacer(Modifier.width(8.dp))
+                    }
                     GhostButton("Clear finished") { controller.clearFinishedDownloads() }
                 }
             }
             Spacer(Modifier.height(10.dp))
             controller.downloads.reversed().forEach { entry ->
-                DownloadRow(entry) { controller.retryDownload(entry.id) }
+                DownloadRow(
+                    entry,
+                    // A refusal is where the sign-in helps; if its block is tucked away, offer it here.
+                    onSignIn = if (showSignIn) null else ({ signInRevealed = true }),
+                    onRetry = { controller.retryDownload(entry.id) }
+                )
                 Spacer(Modifier.height(8.dp))
             }
         }
 
-        if (showLog && controller.downloadLog.isNotEmpty()) {
+        if (showDownloaders && showLog && controller.downloadLog.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
             LogPanel(controller.downloadLog)
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** Format, quality, cover art, what to cut, and the Spotify caveat: the page's "Options". */
+@Composable
+private fun OptionsControls(controller: DesktopController) {
+    Spacer(Modifier.height(8.dp))
+    Hint(SPOTIFY_NOTE)
+    Spacer(Modifier.height(12.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("Format", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
+            Spacer(Modifier.height(6.dp))
+            SegmentedRow(
+                options = listOf<DownloadFormat?>(null) + DownloadFormat.entries,
+                selected = controller.downloadFormat,
+                label = { it?.label ?: "As sent" },
+                onSelect = { controller.downloadFormat = it }
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                controller.downloadFormat?.note ?: "whatever the site served, usually Opus, not converted",
+                style = MaterialTheme.typography.labelSmall,
+                color = Palette.TextFaint
+            )
+            Spacer(Modifier.height(10.dp))
+            CheckRow(
+                label = "Embed cover art",
+                checked = controller.downloadEmbedArt,
+                note = "Cut square from the middle of a video's thumbnail"
+            ) { controller.downloadEmbedArt = it }
+            CheckRow(
+                label = "Cut the non-music parts of music videos",
+                checked = controller.downloadCutNonMusic,
+                note = "Spoken intros and skits that SponsorBlock's listeners have marked"
+            ) { controller.downloadCutNonMusic = it }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Quality",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Palette.Text
+            )
+            Spacer(Modifier.height(6.dp))
+            SegmentedRow(
+                options = DownloadQuality.entries,
+                selected = controller.downloadQuality,
+                label = { it.label },
+                onSelect = { controller.downloadQuality = it }
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (controller.downloadFormat?.lossy == false) "Doesn't apply to ${controller.downloadFormat?.label}, which keeps everything"
+                else controller.downloadQuality.description,
+                style = MaterialTheme.typography.labelSmall,
+                color = Palette.TextFaint
+            )
+            Spacer(Modifier.height(12.dp))
+            CheckRow(
+                label = "Download the whole playlist",
+                checked = controller.downloadPlaylist,
+                note = "Off means just the one track a playlist link points at"
+            ) { controller.downloadPlaylist = it }
+        }
     }
 }
 
@@ -242,7 +340,7 @@ private fun ToolsPanel(controller: DesktopController) {
             ToolChip("QuickJS", tools.jsEngine, "YouTube's challenges")
         }
 
-        if (!tools.ytDlp || !tools.ffmpeg || !tools.spotdl || !tools.jsEngine) {
+        if (anyToolMissing(tools)) {
             Spacer(Modifier.height(10.dp))
             Text(
                 "Something is missing from this installation — reinstalling will " +
@@ -289,7 +387,7 @@ private fun ToolChip(name: String, installed: Boolean, note: String) {
 }
 
 @Composable
-private fun DownloadRow(entry: DownloadEntry, onRetry: () -> Unit) {
+private fun DownloadRow(entry: DownloadEntry, onSignIn: (() -> Unit)?, onRetry: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -379,6 +477,11 @@ private fun DownloadRow(entry: DownloadEntry, onRetry: () -> Unit) {
         if (entry.failed) {
             Spacer(Modifier.height(6.dp))
             Text(entry.status, style = MaterialTheme.typography.labelSmall, color = Palette.TextDim)
+        }
+
+        if (onSignIn != null && refusedByYouTube(entry)) {
+            Spacer(Modifier.height(8.dp))
+            Row { GhostButton("Sign in to YouTube…", icon = Icons.Default.Login, note = Notes.DL_SIGN_IN, onClick = onSignIn) }
         }
     }
 }

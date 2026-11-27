@@ -79,7 +79,7 @@ fun ScrimDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0xCC07050C))
+            .background(Palette.Scrim)
             // Swallows clicks so they don't reach the library underneath;
             // clicking the backdrop closes, as it does everywhere else.
             .clickable(
@@ -296,6 +296,20 @@ private fun JobProgress(controller: DesktopController, job: BulkJob) {
                     style = MaterialTheme.typography.bodySmall,
                     color = Palette.Accent
                 )
+            }
+            // After Stop, the songs it got through are marked done and the rest are not,
+            // so running again carries on with exactly the rest.
+            if (controller.canRunBulkAgain) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Run it again to carry on with the rest.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Palette.TextFaint,
+                        modifier = Modifier.weight(1f)
+                    )
+                    GhostButton("Run again") { controller.runBulkAgain() }
+                }
             }
             if (job.running && job.skipped > 0) {
                 Text(

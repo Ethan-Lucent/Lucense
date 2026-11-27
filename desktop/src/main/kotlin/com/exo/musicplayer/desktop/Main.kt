@@ -28,6 +28,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,6 +66,11 @@ import com.exo.musicplayer.desktop.ui.WindowShortcuts
 import com.exo.musicplayer.desktop.ui.shortcutActions
 import com.exo.musicplayer.desktop.system.SingleInstance
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
+import com.exo.musicplayer.desktop.ui.Motion
+import com.exo.musicplayer.desktop.ui.WindowFade
 import java.awt.GraphicsEnvironment
 import java.awt.SystemTray
 import java.awt.image.BufferedImage
@@ -125,6 +131,20 @@ private fun lucense(args: Array<String>) = application {
     val scope = rememberCoroutineScope()
     val controller = remember { DesktopController(scope) }
 
+    // The main window's fade (made inside the window, where the AWT window is). Closing goes
+    // through it, so the window fades before it hides or the app exits; without it (not made yet,
+    // or the window is already in the tray) there is nothing to fade and it happens at once.
+    var mainFade by remember { mutableStateOf<WindowFade?>(null) }
+    val closeMain: () -> Unit = {
+        val leave = { if (!controller.closeToTray()) exitApplication() }
+        val fade = mainFade
+        if (fade != null && controller.windowShown) fade.fadeOut(onDone = leave) else leave()
+    }
+    val quitMain: () -> Unit = {
+        val fade = mainFade
+        if (fade != null && controller.windowShown) fade.fadeOut(onDone = ::exitApplication) else exitApplication()
+    }
+
     // Lucense started again while this one runs: show this one, and play what it was opened with.
     remember {
         SingleInstance.listen { paths ->
@@ -151,20 +171,22 @@ private fun lucense(args: Array<String>) = application {
                 Item("Next") { controller.next() }
                 Item("Previous") { controller.previous() }
                 Separator()
-                Item("Quit Lucense") { exitApplication() }
+                Item("Quit Lucense") { quitMain() }
             }
         )
     }
 
     // -Dlucense.window=900x600 starts at another size: for checking how a small window looks.
     val startSize = System.getProperty("lucense.window")?.split('x')?.mapNotNull { it.trim().toIntOrNull() }?.takeIf { it.size == 2 }
+    // The main window itself, for the windows that belong to it (Trim).
+    var mainAwt by remember { mutableStateOf<java.awt.Window?>(null) }
     val mainWindow = rememberWindowState(width = (startSize?.get(0) ?: 1280).dp, height = (startSize?.get(1) ?: 820).dp)
     val shortcuts = remember(controller) { WindowShortcuts(controller.shortcutActions()) }
     // The other windows - the mini player, the lyrics - get the playing keys only.
     val playbackKeys = remember(controller) { WindowShortcuts(controller.shortcutActions(), playbackOnly = true) }
     Window(
         // Kept in the tray when that is chosen; otherwise closing quits.
-        onCloseRequest = { if (!controller.closeToTray()) exitApplication() },
+        onCloseRequest = closeMain,
         visible = controller.windowShown,
         title = "Lucense",
         icon = painterResource(FALLBACK_ICON),
@@ -179,11 +201,30 @@ private fun lucense(args: Array<String>) = application {
         onKeyEvent = shortcuts::bubble
     ) {
         EveryIconSize()
+        LaunchedEffect(Unit) { mainAwt = window }
+        // Before Compose has painted anything the window shows its own background, which was
+        // white (or black): the theme's base colour instead, so there is no flash. Done at once
+        // and again once the window's inner parts exist.
+        remember { paintBase(window) }
+        LaunchedEffect(Unit) { paintBase(window) }
+        // How this window fades. Whether the desktop can fade a whole window is found out once.
+        val fadeScope = rememberCoroutineScope()
+        val fade = remember { WindowFade({ window.opacity = it }, WindowFade.canFadeWindow(window), fadeScope) }
+        DisposableEffect(fade) {
+            mainFade = fade
+            // Never leave the window part-way if this goes away mid-fade.
+            onDispose { mainFade = null; fade.cancel() }
+        }
+        // Back from the tray: it was faded out to nothing, so fade it in.
+        LaunchedEffect(controller.windowShown) { if (controller.windowShown) fade.fadeIn() }
         // The smallest window the scaled layout still fits in.
         LaunchedEffect(Unit) { window.minimumSize = Dimension(760, 500) }
         // Asked to the front - from the tray, the mini player, or a second start.
         LaunchedEffect(controller.windowRaised) {
             if (controller.windowRaised == 0) return@LaunchedEffect
+            // A minimised window is still at full opacity, so it starts over; one that was
+            // mid-fade-out (closed, then opened again) turns round from where it is.
+            fade.fadeIn(restart = mainWindow.isMinimized)
             mainWindow.isMinimized = false
             window.toFront()
             window.requestFocus()
@@ -191,7 +232,7 @@ private fun lucense(args: Array<String>) = application {
         // Anything Windows handed over: a double-clicked file, or "Open with".
         LaunchedEffect(Unit) { controller.openExternal(args.toList()) }
         // The title strip's close button, like the window's: into the tray when that is chosen.
-        val frame = remember { WindowFrame(window) { if (!controller.closeToTray()) exitApplication() } }
+        val frame = remember { WindowFrame(window) { closeMain() } }
         LaunchedEffect(Unit) {
             // Windows - on Linux, the window manager - moves, sizes and snaps it
             // from here on; Compose's own resize border along the edges would only
@@ -203,7 +244,8 @@ private fun lucense(args: Array<String>) = application {
         }
         CompositionLocalProvider(LocalWindowFrame provides frame) {
             LucenseDesktopTheme {
-                Box(Modifier.fillMaxSize()) {
+                // Drawn, not laid out: when the window can't be faded as a whole, the picture is.
+                Box(Modifier.fillMaxSize().graphicsLayer { alpha = fade.contentAlpha }) {
                     // The layout adapts down to about 920 wide (a narrower
                     // sidebar and panel, buttons as icons); only below that is
                     // it drawn smaller, and never under 80 %.
@@ -256,7 +298,8 @@ private fun lucense(args: Array<String>) = application {
     }
 
     controller.trimming?.let { track ->
-        TrimWindow(controller, track) { controller.trimming = null }
+        // Owned by the main window, so it stays in front of it; another song's Trim is a new window.
+        key(track.file) { TrimWindow(controller, track, mainAwt) { controller.trimming = null } }
     }
 
     if (controller.lyricsFullscreen) {
@@ -363,10 +406,15 @@ private fun AppHost(controller: DesktopController) {
         onDispose { controller.release() }
     }
 
+    // The start-up screen leaves once the interface has really drawn a frame (not at a fixed
+    // time from the start, which a slow first frame used up), and then it fades rather than goes.
     LaunchedEffect(Unit) {
-        delay(1400)
+        withFrameNanos { }
+        withFrameNanos { }
+        delay(Motion.BOOT_HOLD_MS)
         booting = false
     }
+    val bootAlpha by animateFloatAsState(if (booting) 1f else 0f, Motion.firstFrame())
 
     // Roll on to the next track when one runs out. The engine says when that
     // happened; working it out from the position meant that pausing a track
@@ -382,18 +430,32 @@ private fun AppHost(controller: DesktopController) {
             onChooseMedia = ::chooseMediaFile,
             onPickPlaylistFile = ::choosePlaylistFile
         )
-        if (booting) BootScreen()
+        // The interface is complete underneath, so fading this out is the interface fading in.
+        if (bootAlpha > 0f) BootScreen(Modifier.graphicsLayer { alpha = bootAlpha })
     }
 }
 
+/**
+ * The window's own background, in the theme's base colour, on it and everything inside it.
+ * Before the first frame that is all there is to see - and the default is white.
+ */
+private fun paintBase(window: java.awt.Window) {
+    val base = java.awt.Color(Palette.Base.toArgb() or 0xFF000000.toInt(), false)
+    fun paint(part: java.awt.Component) {
+        runCatching { part.background = base }
+        (part as? java.awt.Container)?.components?.forEach { paint(it) }
+    }
+    paint(window)
+}
+
 @Composable
-private fun BootScreen() {
+private fun BootScreen(modifier: Modifier = Modifier) {
     var visible by remember { mutableStateOf(false) }
     val alpha by animateFloatAsState(if (visible) 1f else 0f, tween(500))
     LaunchedEffect(Unit) { visible = true }
 
     Box(
-        Modifier.fillMaxSize().background(Palette.Base),
+        modifier.fillMaxSize().background(Palette.Base),
         contentAlignment = Alignment.Center
     ) {
         Column(
