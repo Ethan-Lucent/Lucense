@@ -139,6 +139,7 @@ internal val settingsIndex: List<SettingEntry> = buildList {
     add(SettingEntry("Show advanced options", "expert extra controls", look))
     add(SettingEntry("Edit colours", "custom theme, lyrics colours", look, true) { it.coloursChanged() })
     add(SettingEntry("Background", "stars, effect behind the window", look))
+    add(SettingEntry("Song cover in the ball", "round album art in the middle of the reactive ball", look))
     add(SettingEntry("Wallpaper", "a picture of your own behind everything", look))
     add(SettingEntry("Wallpaper dim", "darken the picture", look, true) {
         it.wallpaper != null && it.wallpaperDim != WALLPAPER_DIM_DEFAULT
@@ -519,6 +520,15 @@ private fun AppearanceSettings(controller: DesktopController) {
                 label = { it.label },
                 onSelect = { controller.reactiveMode = it }
             )
+            if (controller.reactiveMode == ReactiveMode.BALL) {
+                Spacer(Modifier.height(6.dp))
+                CheckRow(
+                    "Song cover in the ball",
+                    controller.ballCover,
+                    note = "Shows the cover of the song playing, round, in the middle of the ball. " +
+                        "It follows the music with the ball."
+                ) { controller.ballCover = it }
+            }
         }
         Spacer(Modifier.height(6.dp))
         Hint(

@@ -1,6 +1,23 @@
 package com.exo.musicplayer.desktop.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import com.exo.musicplayer.desktop.data.Covers
+import com.exo.musicplayer.desktop.library.DesktopTrack
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -101,6 +118,66 @@ internal class Placement {
 }
 
 /**
+ * Puts quiet listening back where loud listening would be.
+ *
+ * The analyser measures what goes to the speakers, after the volume slider, and
+ * its levels are on a decibel scale - so turning the volume down 20 dB lowers
+ * every band by the same amount, about 0.3. Left alone, a song at low volume
+ * (or a quiet song) starved the ball: its highest bands, the ones along the top
+ * of the ring, fell under the gate and sat there as flat dots.
+ *
+ * This keeps the recent peak, up at once and down very slowly, and works out
+ * how far short of a loud song's peak it is. That shortfall, [boost], is added
+ * to what is heard. It never takes anything away (loud music is untouched), it
+ * is capped, it fades out where the peak is so low that all there is to hear is
+ * hiss, and because the peak lets go over many seconds a quiet bar after a loud
+ * one is not pumped up.
+ */
+internal class AutoGain(private val reference: Float, private val maxBoost: Float) {
+    private var peak = 0f
+
+    /** What to add to a level, 0 up to the cap. */
+    var boost = 0f
+        private set
+
+    fun update(level: Float, dt: Float) {
+        peak = if (level > peak) level else peak + (level - peak) * (1f - exp(-dt / RELEASE_SECONDS))
+        // Fades in between a hiss and a quiet song, so silence is never lifted into something.
+        val awake = ((peak - HISS) / 0.12f).coerceIn(0f, 1f)
+        boost = (reference - peak).coerceIn(0f, maxBoost) * awake
+    }
+
+    companion object {
+        /** How long the peak takes to forget a loud moment. */
+        const val RELEASE_SECONDS = 8f
+        private const val HISS = 0.08f
+
+        /** [value] lifted by [boost] - not a bar that is already nothing, which stays nothing. */
+        fun lift(value: Float, boost: Float): Float =
+            if (value <= 0f) 0f else min(1f, value + boost * (value / 0.05f).coerceAtMost(1f))
+    }
+}
+
+/**
+ * How high the ball's ring bar number [bar] of [bars] stands, 0..1, from the
+ * bands in [levels] (bass first).
+ *
+ * Mirrored left and right about the vertical line through the ball: bar `i`
+ * and bar `bars - 1 - i` are always equal. The bars sit half a step off that
+ * line, so the join at the top (and the bottom) is a matching pair rather than
+ * one bar with a different neighbour on each side, and between bands the level
+ * is blended, so the ring is smooth rather than stepped.
+ */
+internal fun ballBarLevel(levels: FloatArray, bar: Int, bars: Int): Float {
+    val half = bars / 2
+    val mirrored = if (bar < half) bar else bars - 1 - bar
+    val at = (mirrored + 0.5f) / half * (levels.size - 1)
+    val low = at.toInt().coerceIn(0, levels.size - 2)
+    val part = (at - low).coerceIn(0f, 1f)
+    return (levels[low] + (levels[low + 1] - levels[low]) * part).coerceIn(0f, 1f)
+}
+
+/**
  * The music, as the reactive effects read it, stretched so that it visibly moves.
  *
  * Each band is measured against its own recent floor and ceiling rather than
@@ -141,6 +218,13 @@ internal class Pulse(bands: Int = 14) {
     /** When each ring was sent out, in effect seconds. */
     val rings = FloatArray(6) { -10f }
 
+    /** The loop that draws the ball reuses this one path for the ring of bars, instead of making one per frame. */
+    internal val ring = Path()
+
+    // How much quiet listening is lifted back up: one for the bands, one for the heard bass.
+    private val bandGain = AutoGain(reference = 0.85f, maxBoost = 0.55f)
+    private val heardGain = AutoGain(reference = 0.80f, maxBoost = 0.55f)
+
     private val floors = FloatArray(levels.size)
     private val ceilings = FloatArray(levels.size)
     private var heardFloor = 1f
@@ -175,15 +259,22 @@ internal class Pulse(bands: Int = 14) {
         val punchBefore = punch
         val kickBefore = kick
 
-        val attack = ease(dt, 0.03f)
-        val release = ease(dt, 0.12f)
+        // Quick up, a touch slower down: the ball visibly follows the music
+        // without flickering. (Was 0.03 / 0.12: too lazy on a quiet song.)
+        val attack = ease(dt, 0.016f)
+        val release = ease(dt, 0.09f)
         val settle = ease(dt, 1.6f)
+        var loudest = 0f
+        for (i in levels.indices) loudest = max(loudest, reading[i])
+        bandGain.update(loudest, dt)
+        val bandBoost = bandGain.boost
         for (i in levels.indices) {
-            val value = reading[i]
+            val value = AutoGain.lift(reading[i], bandBoost)
             floors[i] = if (value < floors[i]) value else floors[i] + (value - floors[i]) * settle
             ceilings[i] = if (value > ceilings[i]) value else ceilings[i] + (value - ceilings[i]) * settle
             val swing = ((value - floors[i]) / max(ceilings[i] - floors[i], MIN_SPAN)).coerceIn(0f, 1f)
             // Near silence the stretch is faded out, so a quiet hiss doesn't dance.
+            // Judged on the lifted level, so a quiet song isn't mistaken for hiss.
             val target = (value * 0.3f + swing * 0.7f) * (value / 0.08f).coerceAtMost(1f)
             val step = (target - levels[i]) * (if (target > levels[i]) attack else release)
             levels[i] += step
@@ -198,13 +289,16 @@ internal class Pulse(bands: Int = 14) {
         energy = average(0, levels.size)
 
         // The heard bass on a decibel scale, sixty decibels down to full scale.
-        val loud = if (heardBass >= 0f) {
+        val heardRaw = if (heardBass >= 0f) {
             if (heardBass < 1e-6f) 0f else ((20f * log10(heardBass) + 60f) / 60f).coerceIn(0f, 1f)
         } else {
             var raw = 0f
             for (i in 0 until lowEnd) raw += reading[i]
             raw / lowEnd
         }
+        // The same lift as the bands get, from the bass's own recent peak.
+        heardGain.update(heardRaw, dt)
+        val loud = AutoGain.lift(heardRaw, heardGain.boost)
         // The floor and ceiling give way slowly, so one loud moment doesn't
         // become the new normal and flatten everything after it.
         heardFloor = if (loud < heardFloor) loud else heardFloor + (loud - heardFloor) * ease(dt, 1.6f)
@@ -214,7 +308,7 @@ internal class Pulse(bands: Int = 14) {
         // lower than a loud one instead of both being stretched to fill the ball.
         val plain = ((loud - 0.25f) / 0.75f).coerceIn(0f, 1f)
         val target = (stretched * 0.8f + plain * 0.2f) * (loud / 0.1f).coerceAtMost(1f)
-        heard += (target - heard) * (if (target > heard) ease(dt, 0.012f) else ease(dt, 0.11f))
+        heard += (target - heard) * (if (target > heard) ease(dt, 0.012f) else ease(dt, 0.09f))
         punch = heard
 
         // A beat is the bass jumping above where it has been for the last quarter second.
@@ -307,7 +401,8 @@ fun Backdrop(
     graph: SongShape? = null,
     reactiveMode: ReactiveMode = ReactiveMode.BALL,
     beat: BeatTap? = null,
-    centerpiece: Boolean = true
+    centerpiece: Boolean = true,
+    ballCover: ImageBitmap? = null
 ) {
     when {
         style == BackdropStyle.NONE -> Unit
@@ -320,7 +415,7 @@ fun Backdrop(
             pauseWhenUnfocused = pauseWhenUnfocused
         )
         else ->
-            Animated(style, color, spectrum, modifier, count, pauseWhenUnfocused, graph, reactiveMode, beat, centerpiece)
+            Animated(style, color, spectrum, modifier, count, pauseWhenUnfocused, graph, reactiveMode, beat, centerpiece, ballCover)
     }
 }
 
@@ -335,8 +430,13 @@ private fun Animated(
     graph: SongShape?,
     reactiveMode: ReactiveMode,
     beat: BeatTap?,
-    centerpiece: Boolean
+    centerpiece: Boolean,
+    ballCover: ImageBitmap?
 ) {
+    // The cover in the ball, cross-fading when the song changes. Drawn in the
+    // same canvas as the ball (below), never as a layer of its own.
+    val cover = remember { BallCover() }
+    LaunchedEffect(ballCover) { cover.change(ballCover) }
     val motes = remember(count) { motes(count) }
     val seconds = remember { mutableFloatStateOf(0f) }
     val pulse = remember(spectrum) { Pulse(spectrum?.bands() ?: 14) }
@@ -436,7 +536,7 @@ private fun Animated(
                                 ribbon(t, color, if (listening) pulse else null, place)
                             }
                         BackdropStyle.REACTIVE -> when (reactiveMode) {
-                            ReactiveMode.BALL -> reactiveBall(t, color, pulse)
+                            ReactiveMode.BALL -> reactiveBall(t, color, pulse, cover)
                             ReactiveMode.BARS -> reactiveBars(color, pulse, place, centerpiece)
                         }
                         else -> Unit
@@ -822,6 +922,9 @@ internal fun DrawScope.ribbon(t: Float, color: Color, pulse: Pulse?, place: Plac
 internal fun ballRadius(pulse: Pulse, width: Float, height: Float): Float =
     min(width, height) * 0.105f * (0.78f + pulse.punch * 0.68f + pulse.kick * 0.18f)
 
+/** Bars around the ball: even, so the two halves mirror. */
+private const val BALL_BARS = 72
+
 /** How tall Reactive's bar for [band] stands in a surface [height] tall, in pixels. */
 internal fun barHeight(pulse: Pulse, band: Int, height: Float, density: Float): Float {
     val count = pulse.levels.size
@@ -833,6 +936,85 @@ internal fun barHeight(pulse: Pulse, band: Int, height: Float, density: Float): 
 }
 
 /**
+ * The cover shown inside the ball, and the one it is fading away from.
+ *
+ * Plain holders read at draw time: the fade is an [Animatable] whose value is
+ * only read inside the ball's own draw, so it repaints that canvas and nothing
+ * else, whether or not the music is ticking.
+ */
+internal class BallCover(var to: ImageBitmap? = null) {
+    var from: ImageBitmap? = null
+    val mix = Animatable(1f)
+    val clip = Path()
+
+    suspend fun change(next: ImageBitmap?) {
+        if (next === to) return
+        from = to
+        to = next
+        mix.snapTo(0f)
+        mix.animateTo(1f, tween(FADE_MS))
+    }
+
+    private companion object {
+        const val FADE_MS = 250
+    }
+}
+
+/** How much of the ball's inner radius the cover fills. */
+internal const val COVER_SHARE = 0.62f
+
+/** How much the cover is dimmed so it sits in the scene rather than on it. */
+internal const val COVER_ALPHA = 0.9f
+
+/** [image] cropped square from its middle and round, [radius] wide around [centre], at [alpha]. */
+private fun DrawScope.coverDisc(image: ImageBitmap, clip: Path, centre: Offset, radius: Float, alpha: Float) {
+    if (alpha <= 0.004f || radius < 1f) return
+    clip.rewind()
+    clip.addOval(Rect(centre, radius))
+    val side = min(image.width, image.height)
+    val across = (radius * 2f).roundToInt()
+    clipPath(clip) {
+        drawImage(
+            image,
+            srcOffset = IntOffset((image.width - side) / 2, (image.height - side) / 2),
+            srcSize = IntSize(side, side),
+            dstOffset = IntOffset((centre.x - radius).roundToInt(), (centre.y - radius).roundToInt()),
+            dstSize = IntSize(across, across),
+            alpha = alpha,
+            filterQuality = FilterQuality.Medium
+        )
+    }
+}
+
+/**
+ * The cover of the song playing as [Backdrop]'s `ballCover`: from memory when it
+ * is there, else loaded off the UI thread by [Covers], and held until the next
+ * song's has come so the cross-fade has something to fade from. Null while off,
+ * when nothing is playing, or when the song has no cover.
+ */
+@Composable
+fun rememberBallCover(track: DesktopTrack?, enabled: Boolean): ImageBitmap? {
+    var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    val key = track?.file?.absolutePath
+    LaunchedEffect(key, enabled) {
+        if (!enabled || track == null) {
+            bitmap = null
+            return@LaunchedEffect
+        }
+        bitmap = Covers.cached(track)
+            ?: if (Covers.knownMissing(track)) null else Covers.load(track)
+        // A cover fetched a moment later still arrives, as it does for a list row.
+        if (bitmap == null && !Covers.knownMissing(track)) {
+            snapshotFlow { Covers.revision }.drop(1).first {
+                if (!Covers.knownMissing(track)) bitmap = Covers.load(track)
+                bitmap != null
+            }
+        }
+    }
+    return bitmap
+}
+
+/**
  * A see-through glowing ball in the middle of the page, ringed by the spectrum
  * - mirrored so it is symmetrical, bass at the bottom.
  *
@@ -840,7 +1022,7 @@ internal fun barHeight(pulse: Pulse, band: Int, height: Float, density: Float): 
  * hard beat, sends a ring out on each kick, and shakes the way music visualiser
  * videos do: a quick irregular jitter that dies away with the kick.
  */
-internal fun DrawScope.reactiveBall(t: Float, color: Color, pulse: Pulse) {
+internal fun DrawScope.reactiveBall(t: Float, color: Color, pulse: Pulse, cover: BallCover? = null) {
     val w = size.width
     val h = size.height
     val hot = lerp(color, Color.White, 0.4f)
@@ -869,14 +1051,13 @@ internal fun DrawScope.reactiveBall(t: Float, color: Color, pulse: Pulse) {
         )
     }
 
-    val bars = 72
-    val half = bars / 2
-    val bands = pulse.levels.size
-    val ring = Path()
+    val bars = BALL_BARS
+    val ring = pulse.ring
+    ring.rewind()
     for (i in 0 until bars) {
-        val j = if (i < half) i else bars - 1 - i
-        val level = pulse.levels[(j * bands / half).coerceAtMost(bands - 1)].coerceIn(0f, 1f)
-        val angle = PI / 2 + i.toDouble() / bars * 2 * PI
+        val level = ballBarLevel(pulse.levels, i, bars)
+        // Half a step off straight down, to match ballBarLevel's mirror line.
+        val angle = PI / 2 + (i + 0.5) / bars * 2 * PI
         val inner = radius * 1.12f
         val outer = inner + radius * (0.05f + level.pow(0.85f) * 1.25f)
         val dx = cos(angle).toFloat()
@@ -896,6 +1077,23 @@ internal fun DrawScope.reactiveBall(t: Float, color: Color, pulse: Pulse) {
         radius,
         centre
     )
+    // The cover goes on the ball's glass, under its bright edge and inside the
+    // spectrum ring: same canvas, same layer, so the panes in front of the
+    // page cover it exactly as they cover the ring. Nothing to show, nothing drawn.
+    if (cover != null) {
+        val mix = cover.mix.value
+        val across = radius * COVER_SHARE * (1f + kick * 0.06f + punch * 0.05f)
+        cover.from?.let { coverDisc(it, cover.clip, centre, across, COVER_ALPHA * (1f - mix)) }
+        cover.to?.let { image ->
+            coverDisc(image, cover.clip, centre, across, COVER_ALPHA * mix)
+            drawCircle(
+                lerp(color, Color.White, 0.25f).copy(alpha = (0.55f + punch * 0.3f) * mix),
+                across,
+                centre,
+                style = Stroke(width = (1.4f + punch) * density)
+            )
+        }
+    }
     drawCircle(hot.copy(alpha = 0.85f), radius, centre, style = Stroke(width = (2f + punch * 1.5f) * density))
 }
 
