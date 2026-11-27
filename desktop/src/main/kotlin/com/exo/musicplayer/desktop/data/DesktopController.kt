@@ -124,6 +124,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -2977,14 +2978,29 @@ class DesktopController(parent: CoroutineScope) {
         private set
     private var bulkJob: Job? = null
 
-    private enum class BulkOutcome { UPDATED, ALREADY_HAD, NOTHING_FOUND }
-
     private fun Boolean.asOutcome() = if (this) BulkOutcome.UPDATED else BulkOutcome.NOTHING_FOUND
 
+    /** What the last bulk run was asked to do, so a stopped one can be run again in a click. */
+    private class LastBulk(val kind: BulkKind, val names: Boolean, val tags: Boolean)
+    private var lastBulk: LastBulk? = null
+
+    /** True when the run that just ended was stopped and can be picked up again. */
+    val canRunBulkAgain: Boolean get() = bulk.stopped && !bulk.running && lastBulk?.kind?.label == bulk.label
+
+    /** Picks a stopped run up again: it visits exactly the songs not yet marked as done. */
+    fun runBulkAgain(redo: Boolean = false) {
+        lastBulk?.let { runBulk(it.kind, redo, it.names, it.tags) }
+    }
+
     fun cancelBulk() {
+        if (!bulk.running) return
         bulkJob?.cancel()
         bulkJob = null
-        bulk = bulk.copy(running = false, finishedNote = "Stopped.")
+        // Counted from what was really finished and marked, never from songs in flight.
+        bulk = bulk.copy(
+            running = false, current = "", stopped = true,
+            finishedNote = stoppedNote(bulk.done, bulk.total)
+        )
     }
 
     /**
@@ -3002,6 +3018,7 @@ class DesktopController(parent: CoroutineScope) {
     fun runBulk(kind: BulkKind, redo: Boolean, names: Boolean = true, tags: Boolean = true) {
         if (bulk.running) return
         val column = kind.markColumn
+        lastBulk = LastBulk(kind, names, tags)
         bulkJob = scope.launch {
             val already = if (redo || column == null) emptySet() else io { store.markedPaths(column) }
             val queue = if (kind == BulkKind.REPAIR) {
@@ -3015,7 +3032,7 @@ class DesktopController(parent: CoroutineScope) {
                         it.title == it.file.nameWithoutExtension
                 }
             } else {
-                tracks.filter { redo || it.file.absolutePath !in already }
+                bulkQueue(tracks, { it.file.absolutePath }, already, redo)
             }
             val skipped = tracks.size - queue.size
 
@@ -3045,6 +3062,8 @@ class DesktopController(parent: CoroutineScope) {
                 }
             }
 
+            // Stopped meanwhile: cancelBulk already wrote the note, don't overwrite it.
+            ensureActive()
             bulk = bulk.copy(
                 running = false,
                 done = queue.size,
@@ -3064,65 +3083,23 @@ class DesktopController(parent: CoroutineScope) {
         }
     }
 
-    private data class Tally(val updated: Int, val alreadyHad: Int, val failed: Int)
-
-    /**
-     * Takes [queue] through [step] a few songs at a time, keeping [bulk] up to
-     * date as it goes.
-     *
-     * Lookups mostly wait on the network, so several songs go at once. Workers
-     * share the UI thread between suspensions, so the counters need no locking.
-     * A song that throws counts as nothing found rather than ending the run.
-     */
+    /** The run's own loop lives in BulkRun.kt (where it can be tested); this feeds it [bulk]. */
     private suspend fun workThrough(
         queue: List<DesktopTrack>,
         workers: Int,
         afterEach: suspend (DesktopTrack) -> Unit = {},
         step: suspend (DesktopTrack) -> BulkOutcome
-    ): Tally {
-        var done = 0
-        var updated = 0
-        var alreadyHad = 0
-        var failed = 0
-        val inFlight = mutableListOf<String>()
-        val work = Channel<DesktopTrack>(Channel.UNLIMITED)
-        queue.forEach { work.trySend(it) }
-        work.close()
-
-        coroutineScope {
-            repeat(workers) {
-                launch {
-                    for (track in work) {
-                        inFlight += track.title
-                        bulk = bulk.copy(current = inFlight.joinToString("  ·  "))
-                        val outcome = try {
-                            step(track)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Exception) {
-                            BulkOutcome.NOTHING_FOUND
-                        }
-                        when (outcome) {
-                            BulkOutcome.UPDATED -> updated++
-                            BulkOutcome.ALREADY_HAD -> alreadyHad++
-                            BulkOutcome.NOTHING_FOUND -> failed++
-                        }
-                        afterEach(track)
-                        done++
-                        inFlight -= track.title
-                        bulk = bulk.copy(
-                            done = done,
-                            updated = updated,
-                            alreadyHad = alreadyHad,
-                            failed = failed,
-                            current = inFlight.joinToString("  ·  ")
-                        )
-                    }
-                }
-            }
-        }
-        return Tally(updated, alreadyHad, failed)
-    }
+    ): BulkTally = workThroughQueue(
+        queue, workers, label = { it.title },
+        onProgress = { p ->
+            bulk = bulk.copy(
+                done = p.done, updated = p.updated, alreadyHad = p.alreadyHad,
+                failed = p.failed, current = p.current
+            )
+        },
+        afterEach = afterEach,
+        step = step
+    )
 
     // ---- Fix: the songs picked out, the parts ticked -------------------------
 
@@ -3168,6 +3145,7 @@ class DesktopController(parent: CoroutineScope) {
                 if (genres) add("genres for $genred")
                 if (lyrics) add("lyrics for $lyricked")
             }
+            ensureActive()
             bulk = bulk.copy(
                 running = false,
                 done = targets.size,

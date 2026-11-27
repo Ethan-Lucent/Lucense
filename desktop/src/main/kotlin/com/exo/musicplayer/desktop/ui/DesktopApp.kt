@@ -198,7 +198,9 @@ fun DesktopApp(
                         destination = it
                         showSettings = false
                     },
-                    onSettings = { showSettings = !showSettings }
+                    onSettings = { showSettings = !showSettings },
+                    bulkOpen = dialog == DialogKind.BULK,
+                    onOpenBulk = { dialog = DialogKind.BULK }
                 )
 
                 if (glass) Spacer(Modifier.width(Glass.GAP))

@@ -1,7 +1,10 @@
 package com.exo.musicplayer.data.lyrics
 
 import com.exo.musicplayer.data.net.Http
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -76,8 +79,17 @@ class LyricsProviderChain(
         var sawInstrumental = false
         for (provider in providers) {
             if (!isOn(provider.label)) continue
-            val result = runCatching { provider.fetch(title, artist, album, durationMs) }
-                .getOrElse { LyricsFetch.NotFound }
+            // A service failing is "nothing from it", but stopping the run is not: caught
+            // here as a failure, a cancelled lookup came back as NotFound and the song was
+            // recorded as checked when it never had been.
+            val result = try {
+                provider.fetch(title, artist, album, durationMs)
+            } catch (cancelled: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                LyricsFetch.NotFound
+            } catch (failure: Throwable) {
+                LyricsFetch.NotFound
+            }
             when (result) {
                 is LyricsFetch.Found -> return result.tidied() to provider.label
                 is LyricsFetch.Instrumental -> sawInstrumental = true
