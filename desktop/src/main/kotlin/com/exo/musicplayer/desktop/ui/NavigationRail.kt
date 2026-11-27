@@ -553,7 +553,9 @@ private fun RailSearch(compact: Boolean, onClick: () -> Unit) {
             )
             .hoverable(interaction)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 7.dp),
+            // The hint gets the same clear margin from the border as the icon (a little more: its
+            // letters are spaced out), and the words give way to it, not the other way round.
+            .padding(start = 10.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(Icons.Default.Search, null, Modifier.size(15.dp), tint = Palette.TextFaint)
@@ -566,6 +568,13 @@ private fun RailSearch(compact: Boolean, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        Text("Ctrl+K", style = MaterialTheme.typography.labelSmall, color = Palette.TextFaint)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "Ctrl+K",
+            style = MaterialTheme.typography.labelSmall,
+            color = Palette.TextFaint,
+            maxLines = 1,
+            softWrap = false
+        )
     }
 }

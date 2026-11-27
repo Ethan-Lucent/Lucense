@@ -230,14 +230,15 @@ fun SettingsScreen(controller: DesktopController, onChooseFolder: () -> File?) {
             }
             return@Column
         }
-        // Scrolls sideways when the pane is too narrow for seven tabs, rather
-        // than a Row squeezing the last one into a letter per line.
-        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp).fadingHorizontalScroll()) {
+        // The strip scrolls sideways (fading at the edges, the open tab kept in view) when the
+        // pane is too narrow for seven tabs, rather than squeezing the last one into a letter per line.
+        Box(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp)) {
             SegmentedRow(
                 options = SettingsTab.entries,
                 selected = tab,
                 label = { it.label },
-                onSelect = { tab = it }
+                onSelect = { tab = it },
+                scrollWhenTight = true
             )
         }
         Crossfade(tab, Modifier.fillMaxSize(), Motion.change(), label = "settings tab") { shown ->

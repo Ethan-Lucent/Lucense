@@ -19,6 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -103,6 +108,7 @@ object LucenseContextMenu : ContextMenuRepresentation {
         val status = state.status
         if (status !is ContextMenuState.Status.Open) return
         val close = { state.status = ContextMenuState.Status.Closed }
+        val window = LocalWindowInfo.current.containerSize
         val list = items()
         val rows = list.indices.filter { list[it] !is RatingMenuItem }
         var selected by remember(status) { mutableStateOf(-1) }
@@ -193,6 +199,7 @@ object LucenseContextMenu : ContextMenuRepresentation {
             }
         ) {
             MenuList(
+                window,
                 list,
                 selected = if (inSub) -1 else selected,
                 opened = opened,
@@ -227,6 +234,7 @@ object LucenseContextMenu : ContextMenuRepresentation {
                     properties = PopupProperties(focusable = false)
                 ) {
                     MenuList(
+                        window,
                         submenu.items,
                         selected = if (inSub) subSelected else -1,
                         opened = -1,
@@ -256,6 +264,7 @@ private fun submenuRows(items: List<ContextMenuItem>): List<Int> = items.indices
  */
 @Composable
 private fun MenuList(
+    window: IntSize,
     list: List<ContextMenuItem>,
     selected: Int,
     opened: Int,
@@ -266,9 +275,11 @@ private fun MenuList(
 ) {
     Column(
         Modifier
+            // Limits first, then the row-width: the other way round, IntrinsicSize pins the width and the minimum is lost.
+            .menuPanelSize(window)
             .width(IntrinsicSize.Max)
-            .widthIn(min = MENU_MIN_WIDTH)
             .floating(8.dp)
+            .verticalScroll(rememberScrollState())
             .padding(MENU_PAD)
     ) {
         list.forEachIndexed { i, item ->
@@ -376,6 +387,7 @@ internal fun MenuRow(
             color = if (enabled) Palette.Text else Palette.TextFaint,
             maxLines = 1,
             softWrap = false,
+            overflow = TextOverflow.Ellipsis,
             modifier = if (chevron) Modifier.padding(end = 18.dp) else Modifier
         )
         if (chevron) {
@@ -586,6 +598,29 @@ internal fun starsLabel(stars: Int): String = when (stars) {
 
 private val MENU_ROW = 30.dp
 internal val MENU_MIN_WIDTH = 190.dp
+/** The widest a menu grows for a long label; it is cut with an ellipsis beyond this. */
+private val MENU_MAX_WIDTH = 360.dp
+/** What a menu leaves free of the window on each side. */
+private val MENU_WINDOW_MARGIN = 8.dp
+
+/**
+ * A menu panel's size limits: as wide as its longest row (at least [MENU_MIN_WIDTH], at most
+ * [MENU_MAX_WIDTH]), and never wider or taller than the window - it scrolls then - so a long menu in
+ * a small window, or at a large interface size, stays whole on screen instead of running off it.
+ * Worked out in composition from the window's size and the density in force, not while measuring.
+ * [window] is the main window's size in pixels, read by the caller *outside* the popup: inside it
+ * a popup's own window info can be the popup's own size.
+ */
+@Composable
+internal fun Modifier.menuPanelSize(window: IntSize): Modifier {
+    val density = LocalDensity.current
+    val roomW = with(density) { window.width.toDp() } - MENU_WINDOW_MARGIN * 2
+    val roomH = with(density) { window.height.toDp() } - MENU_WINDOW_MARGIN * 2
+    // Before the window has a size (the first frame) there is no limit but the sensible one.
+    val maxW = if (window.width <= 0) MENU_MAX_WIDTH else minOf(MENU_MAX_WIDTH, roomW).coerceAtLeast(0.dp)
+    val maxH = if (window.height <= 0) 4000.dp else roomH.coerceAtLeast(MENU_ROW)
+    return this.widthIn(min = minOf(MENU_MIN_WIDTH, maxW), max = maxW).heightIn(max = maxH)
+}
 private val NOTE_GAP = 10.dp
 private val MENU_PAD = 4.dp
 /** How far a submenu tucks over its parent's edge, so the pointer never crosses a dead gap. */

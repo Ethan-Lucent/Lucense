@@ -710,56 +710,6 @@ fun CheckRow(
     }
 }
 
-/** Segmented row of choices — the desktop idiom for a small enum. */
-@Composable
-fun <T> SegmentedRow(
-    options: List<T>,
-    selected: T,
-    label: (T) -> String,
-    onSelect: (T) -> Unit
-) {
-    Row(
-        Modifier
-            .then(
-                if (Glass.on) {
-                    Modifier.glassChip(RoundedCornerShape(50), fill = 0.04f)
-                } else {
-                    Modifier
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(Palette.Content)
-                        .border(1.dp, Palette.Line, RoundedCornerShape(7.dp))
-                }
-            )
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        options.forEach { option ->
-            val isSelected = option == selected
-            Box(
-                Modifier
-                    .then(
-                        if (Glass.on && isSelected) {
-                            Modifier.glassChip(RoundedCornerShape(50), fill = 0.12f, edge = 1.1f)
-                                .background(Palette.Selected.copy(alpha = 0.55f))
-                        } else {
-                            Modifier.clip(if (Glass.on) RoundedCornerShape(50) else RoundedCornerShape(5.dp))
-                        }
-                    )
-                    .background(if (isSelected && !Glass.on) Palette.Selected else Color.Transparent)
-                    .clickable { onSelect(option) }
-                    .padding(horizontal = 11.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    label(option),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isSelected) Palette.Text else Palette.TextDim
-                )
-            }
-        }
-    }
-}
-
 @Composable
 fun ThinProgress(progress: Float?, modifier: Modifier = Modifier) {
     if (progress == null) {
