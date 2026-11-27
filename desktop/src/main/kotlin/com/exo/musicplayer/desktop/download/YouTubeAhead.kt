@@ -24,9 +24,15 @@ import java.util.concurrent.ConcurrentHashMap
  * plays from what was kept, and a download hands it to yt-dlp
  * (`--load-info-json`), which then goes straight to fetching the audio.
  *
- * Your YouTube reads its first songs ahead ([lookAhead]), a couple at a time,
- * so most of them start as soon as they are clicked. A click on one not read
- * yet reads it at once rather than waiting its turn.
+ * Your YouTube, its mixes and the first search results read their first songs
+ * ahead ([lookAhead]), a couple at a time, so most of them start as soon as
+ * they are clicked. A click on one not read yet reads it at once rather than
+ * waiting its turn.
+ *
+ * What is read picks the address for a *preview* (a small plain file, see
+ * [DownloadQuality.PREVIEW_FORMAT_SELECTOR]), but the answer kept holds every
+ * format YouTube offered, and a download chooses its own from those, by its
+ * own quality. So one read serves both, and neither gets the other's format.
  */
 object YouTubeAhead {
 
@@ -77,7 +83,11 @@ object YouTubeAhead {
         return true
     }
 
-    /** The address to play [id] from: kept, being read, or read now. */
+    /**
+     * The address to play [id] from: kept, being read, or read now.
+     * [quality] no longer changes the read (a preview has its own format and
+     * a download picks from what was kept); it stays so callers needn't change.
+     */
     suspend fun audioUrl(id: String, quality: DownloadQuality): String? = find(id, quality)?.url
 
     /** [id], read: what was kept, what is being read, or read now, ahead of anything waiting. */
@@ -86,12 +96,13 @@ object YouTubeAhead {
         synchronized(waiting) { waiting.remove(id) }
         // Waited on here rather than read here: a preview given up on stops waiting at once,
         // and the reading finishes all the same, for the next click.
-        return start(listOf(id), quality).getValue(id).await()
+        return start(listOf(id)).getValue(id).await()
     }
 
     /**
      * Reads [ids] ahead, the first first, two yt-dlp at a time. Put before
-     * whatever was waiting already, which is what was wanted earlier.
+     * whatever was waiting already, which is what was wanted earlier. Only
+     * [MAX_WAITING] wait at once: a long list doesn't flood yt-dlp, its tail is let go.
      */
     fun lookAhead(ids: List<String>, quality: DownloadQuality) {
         synchronized(waiting) {
@@ -101,12 +112,12 @@ object YouTubeAhead {
             while (waiting.size > MAX_WAITING) waiting.removeLast()
             while (workers < WORKERS && waiting.isNotEmpty()) {
                 workers++
-                scope.launch { work(quality) }
+                scope.launch { work() }
             }
         }
     }
 
-    private suspend fun work(quality: DownloadQuality) {
+    private suspend fun work() {
         try {
             while (true) {
                 val batch = synchronized(waiting) {
@@ -121,7 +132,7 @@ object YouTubeAhead {
                     if (synchronized(waiting) { waiting.isEmpty() }) return
                     continue
                 }
-                start(batch, quality).values.forEach { it.await() }
+                start(batch).values.forEach { it.await() }
             }
         } finally {
             synchronized(waiting) { workers-- }
@@ -132,7 +143,7 @@ object YouTubeAhead {
      * Starts one yt-dlp reading those of [ids] that aren't kept or being read
      * already, and hands back an answer to wait on for each of [ids].
      */
-    private fun start(ids: List<String>, quality: DownloadQuality): Map<String, Deferred<Found?>> {
+    private fun start(ids: List<String>): Map<String, Deferred<Found?>> {
         val answers = LinkedHashMap<String, Deferred<Found?>>()
         val mine = mutableListOf<String>()
         for (id in ids) {
@@ -146,12 +157,32 @@ object YouTubeAhead {
             answers[id] = already ?: answer
             if (already == null) mine += id
         }
-        if (mine.isNotEmpty()) scope.launch { read(mine, quality) }
+        if (mine.isNotEmpty()) scope.launch {
+            try {
+                reader(mine)
+            } finally {
+                // Whatever the reader left unanswered is answered as not read.
+                mine.forEach { id -> reading.remove(id)?.complete(null) }
+            }
+        }
         return answers
     }
 
+    /** Keeps [answer] and hands it to whoever waits for that video. */
+    internal fun answered(answer: Found) {
+        found[answer.id] = answer
+        reading.remove(answer.id)?.complete(answer)
+    }
+
+    /** Who reads a batch of videos: yt-dlp, except where a test puts something of its own. */
+    @Volatile
+    internal var reader: (List<String>) -> Unit = ::readWithYtDlp
+
+    /** What waits to be read ahead, the next first. */
+    internal fun waitingIds(): List<String> = synchronized(waiting) { waiting.toList() }
+
     /** Runs yt-dlp over [ids], keeping each answer as it comes; what it couldn't read is answered null. */
-    private fun read(ids: List<String>, quality: DownloadQuality) {
+    private fun readWithYtDlp(ids: List<String>) {
         try {
             val exe = ToolPaths.ytDlp
             if (!exe.isFile) return
@@ -159,7 +190,8 @@ object YouTubeAhead {
                 buildList {
                     add(exe.absolutePath)
                     // One JSON document a line, a line a video, each as soon as it is read.
-                    addAll(listOf("-j", "-f", quality.formatSelector, "--no-playlist", "--no-warnings", "--ignore-config", "--no-abort-on-error"))
+                    // The preview's format picks the address kept; the answer still lists every format, for downloads.
+                    addAll(listOf("-j", "-f", DownloadQuality.PREVIEW_FORMAT_SELECTOR, "--no-playlist", "--no-warnings", "--ignore-config", "--no-abort-on-error"))
                     addAll(ytDlpJsEngine() + NetworkProxy.ytDlpArgs() + YouTubeSignIn.ytDlpArgs() + YT_DLP_NETWORK)
                     ids.forEach { add("https://www.youtube.com/watch?v=$it") }
                 }
@@ -168,15 +200,12 @@ object YouTubeAhead {
             process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
                 lines.forEach { line ->
                     val answer = runCatching { keep(line) }.getOrNull() ?: return@forEach
-                    found[answer.id] = answer
-                    reading.remove(answer.id)?.complete(answer)
+                    answered(answer)
                 }
             }
             process.waitFor()
         } catch (_: Exception) {
-            // Answered below, as not read.
-        } finally {
-            ids.forEach { id -> reading.remove(id)?.complete(null) }
+            // Answered by the caller, as not read.
         }
     }
 
@@ -199,7 +228,7 @@ object YouTubeAhead {
     /** Two yt-dlp at a time, a few videos each: the second half of a batch shares the first's start. */
     private const val WORKERS = 2
     private const val BATCH = 3
-    private const val MAX_WAITING = 24
+    internal const val MAX_WAITING = 24
 
     /** Given up on this long before YouTube says it ends: a download may take a while. */
     private const val MARGIN_MS = 30L * 60 * 1000

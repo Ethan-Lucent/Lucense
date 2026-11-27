@@ -2336,6 +2336,9 @@ class DesktopController(parent: CoroutineScope) {
         scope.launch {
             val result = youtube.search(query, limit = 25)
             youtubeResults = result.videos
+            // The first few are read now, while the list is being looked at, so a
+            // preview starts at once instead of waiting for yt-dlp (several seconds).
+            if (tools.ready) YouTubeAhead.lookAhead(result.videos.take(SEARCH_AHEAD).map { it.id }, downloadQuality)
             youtubeStatus = when {
                 result.videos.isEmpty() ->
                     "Nothing came back. yt-dlp may need updating — one click in " +
@@ -4763,6 +4766,9 @@ class DesktopController(parent: CoroutineScope) {
         /** How many of Your YouTube's songs, and of an opened mix's, are read ahead. */
         const val FOR_YOU_AHEAD = 10
         const val MIX_AHEAD = 5
+
+        /** How many of the Identify → YouTube search results are read ahead: the ones in view. */
+        const val SEARCH_AHEAD = 6
     }
 
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
