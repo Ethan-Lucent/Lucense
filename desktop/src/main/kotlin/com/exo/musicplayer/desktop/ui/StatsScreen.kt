@@ -176,7 +176,7 @@ private fun WeatherBreakdown(byWeather: Map<String, Int>) {
                 Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(condition?.emoji ?: "•", style = MaterialTheme.typography.bodySmall)
+                WeatherGlyph(condition, Palette.TextDim)
                 Spacer(Modifier.width(9.dp))
                 Text(
                     condition?.label ?: name,

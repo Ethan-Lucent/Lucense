@@ -72,16 +72,20 @@ fun MoodsScreen(controller: DesktopController) {
                 Column(Modifier.weight(1f)) {
                     val snapshot = controller.weather
                     if (snapshot != null) {
-                        Text(
-                            "${snapshot.condition.emoji}  ${snapshot.condition.label}" +
-                                if (snapshot.temperatureC.isNaN()) {
-                                    ""
-                                } else {
-                                    " · ${snapshot.temperatureC.roundToInt()}°C"
-                                },
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = Palette.Text
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            WeatherGlyph(snapshot.condition, Palette.Accent, size = 28.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                snapshot.condition.label +
+                                    if (snapshot.temperatureC.isNaN()) {
+                                        ""
+                                    } else {
+                                        " · ${snapshot.temperatureC.roundToInt()}°C"
+                                    },
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = Palette.Text
+                            )
+                        }
                         Spacer(Modifier.height(2.dp))
                         Hint(
                             controller.weatherPlace.ifBlank { "Located from your IP address" } +
@@ -206,7 +210,15 @@ private fun ConditionChip(
             .padding(horizontal = 13.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(condition.emoji, style = MaterialTheme.typography.bodySmall)
+        // On the selected chip the background is the accent, so the icon flips to OnAccent.
+        WeatherGlyph(
+            condition,
+            tint = when {
+                selected -> Palette.OnAccent
+                isNow -> Palette.Accent
+                else -> Palette.TextDim
+            }
+        )
         Spacer(Modifier.width(7.dp))
         Text(
             condition.label,
