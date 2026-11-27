@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -128,7 +130,7 @@ internal val settingsIndex: List<SettingEntry> = buildList {
         add(SettingEntry("Offer Lucense for music files in Explorer", "open with default app", playback))
         add(SettingEntry("Game ducking", "turn the music down with a hotkey while gaming", playback, true) { it.duckEnabled })
     }
-    add(SettingEntry("Accent colour", "theme colours, swatches, dark light", look))
+    add(SettingEntry("Theme", "Dark or light, accent colour, swatches, light mode, dark mode", look))
     add(SettingEntry("Interface size", "zoom, scale, bigger text, smaller", look))
     add(SettingEntry("Liquid glass", "frosted panes, transparency", look))
     add(SettingEntry("Glass see-through", "how much of the background shows through the glass", look, true) {
@@ -407,30 +409,47 @@ private fun AppearanceSettings(controller: DesktopController) {
         SectionTitle("Appearance")
         Spacer(Modifier.height(4.dp))
         Hint(
-            "Recolours the whole window, not just the buttons. Each one is a published " +
-                "scheme - the surfaces and the text tones come from it together, which is " +
-                "what keeps every label readable on every layer."
+            "Recolours the whole window, not just the buttons. Every theme comes dark and " +
+                "light, and most are published schemes - the surfaces and the text tones come " +
+                "from it together, which is what keeps every label readable on every layer."
         )
         Spacer(Modifier.height(14.dp))
         var editingColours by remember { mutableStateOf(false) }
+        val current = controller.accent
+        Text("Theme", style = MaterialTheme.typography.titleMedium, color = Palette.Text)
+        Spacer(Modifier.height(8.dp))
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // Fixed-width cells, and the short last row padded out with empty
-            // ones: a swatch used to be as wide as its own label, so "Amethyst"
-            // and "Rose" made different columns and the bottom row sat offset.
-            AccentChoice.entries.chunked(SWATCHES_PER_ROW).forEach { row ->
+            // ones, so the columns line up whatever the names are.
+            AccentChoice.families.chunked(SWATCHES_PER_ROW).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    row.forEach { option ->
-                        AccentSwatch(option, option == controller.accent) {
-                            controller.accent = option
-                            if (option == AccentChoice.CUSTOM) editingColours = true
+                    row.forEach { family ->
+                        Noted(family.name, if (family.hasModes) Notes.THEME else Notes.THEME_CUSTOM) {
+                            FamilySwatch(family, family.name == current.family) {
+                                // A family keeps the mode in use: Nord from a light theme is Snow Storm.
+                                controller.accent = if (current.light) family.light else family.dark
+                                if (!family.hasModes) editingColours = true
+                            }
                         }
                     }
                     repeat(SWATCHES_PER_ROW - row.size) { Spacer(Modifier.width(SWATCH_CELL)) }
                 }
             }
         }
+        // Custom has only its own colours, so there is no other mode to switch to.
+        if (current.themeFamily.hasModes) {
+            Spacer(Modifier.height(10.dp))
+            Noted(null, Notes.THEME_MODE) {
+                SegmentedRow(
+                    options = listOf(false, true),
+                    selected = current.light,
+                    label = { if (it) "Light" else "Dark" },
+                    onSelect = { controller.accent = current.variant(light = it) }
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
-        Hint(controller.accent.credit)
+        Hint(current.credit)
         Spacer(Modifier.height(10.dp))
         Text("Interface size", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
         Spacer(Modifier.height(6.dp))
@@ -1047,32 +1066,55 @@ private fun AboutSettings(controller: DesktopController) {
 }
 
 
+/**
+ * A family's swatch: its dark variant on the left and its light one on the
+ * right, each its page colour with its accent, so both modes show at a glance.
+ * Opaque colours inside the clip, so it reads the same with glass on.
+ */
 @Composable
-private fun AccentSwatch(choice: AccentChoice, selected: Boolean, onClick: () -> Unit) {
+private fun FamilySwatch(family: ThemeFamily, selected: Boolean, onClick: () -> Unit) {
+    val custom = !family.hasModes
+    val dark = if (custom) Palette.custom else family.dark.colors
+    val light = if (custom) Palette.custom else family.light.colors
     Column(
         Modifier.width(SWATCH_CELL),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // The ring sits a little outside the swatch, on the page, so it shows
+        // whatever the two halves are.
         Box(
             Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(if (choice == AccentChoice.CUSTOM) Palette.custom.accent else choice.accent)
-                .border(
-                    2.dp,
-                    if (selected) Palette.Text else Color.Transparent,
-                    RoundedCornerShape(9.dp)
-                )
+                .border(2.dp, if (selected) Palette.Text else Color.Transparent, RoundedCornerShape(11.dp))
+                .padding(3.dp)
+                .size(width = 52.dp, height = 40.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .border(1.dp, Palette.Line, RoundedCornerShape(8.dp))
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
+            Row(Modifier.fillMaxSize()) {
+                listOf(dark, light).forEach { half ->
+                    Box(
+                        Modifier.weight(1f).fillMaxHeight().background(half.content),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(Modifier.size(12.dp).clip(CircleShape).background(half.accent))
+                    }
+                }
+            }
             if (selected) {
-                Icon(Icons.Default.Check, null, Modifier.size(17.dp), tint = if (choice == AccentChoice.CUSTOM) Palette.custom.onAccent else choice.onAccent)
+                val shown = Palette.themeColors
+                Box(
+                    Modifier.size(22.dp).clip(CircleShape).background(shown.accent),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Check, null, Modifier.size(15.dp), tint = shown.onAccent)
+                }
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(5.dp))
         Text(
-            choice.label,
+            family.name,
             style = MaterialTheme.typography.labelSmall,
             color = if (selected) Palette.Text else Palette.TextFaint,
             maxLines = 1,

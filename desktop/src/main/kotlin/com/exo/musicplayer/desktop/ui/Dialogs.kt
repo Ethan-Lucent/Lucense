@@ -79,7 +79,7 @@ fun ScrimDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0xCC07050C))
+            .background(Palette.Scrim)
             // Swallows clicks so they don't reach the library underneath;
             // clicking the backdrop closes, as it does everywhere else.
             .clickable(

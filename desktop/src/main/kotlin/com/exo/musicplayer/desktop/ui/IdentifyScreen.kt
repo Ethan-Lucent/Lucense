@@ -479,7 +479,7 @@ private fun ProviderBadge(match: MusicMatch) {
         Text(
             if (fingerprinted) "Shazam" else match.provider.ifBlank { "Search" },
             style = MaterialTheme.typography.labelSmall,
-            color = if (fingerprinted) Color(0xFFEFE6FF) else Palette.TextDim
+            color = if (fingerprinted) ThemeColors.readableOn(Palette.AccentSoft, Palette.colors) else Palette.TextDim
         )
     }
 }

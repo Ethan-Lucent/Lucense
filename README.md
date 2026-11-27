@@ -353,11 +353,14 @@ file said before anything touched it.
   default player, so that last step is yours.
 - **Lyrics in their own window** (Windows), which can sit anywhere on screen.
 - **Themes:**
-  - Thirteen published colour schemes: Catppuccin Mocha and Latte, Dracula,
-    Tokyo Night, Rosé Pine, Nord, Gruvbox, Everforest, Solarized dark and light,
-    One Dark, Ayu Mirage and Daylight.
-  - Every scheme is checked for readable contrast.
-  - Android has the same twelve schemes beside its own palettes and Material
+  - Fourteen theme families, each with a dark and a light variant, switched
+    in Settings → Appearance or the command palette: Black (the default),
+    Slate, Ocean and Sunset (built on Radix Colors), and the published
+    Catppuccin, Dracula/Alucard, Tokyo Night, Rosé Pine, Nord, Gruvbox,
+    Everforest, Solarized, One and Ayu.
+  - Every scheme is checked for readable contrast and balanced layers; the
+    sources and numbers are in [docs/THEMES.md](docs/THEMES.md).
+  - Android has its own twelve schemes beside its own palettes and Material
     You. Building your own theme is Windows-only for now.
 - **Colours from the cover:** the theme stays and its accent follows the
   artwork of the song playing, on both apps.

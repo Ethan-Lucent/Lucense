@@ -105,6 +105,11 @@ object Notes {
     const val FX_CLEAR = "Puts speed, pitch and every effect back to normal."
     const val FX_FINE_TUNE = "Reverb, distortion, lo-fi, tremolo, 8D, echo and the equaliser."
 
+    // Settings > Appearance, the theme.
+    const val THEME = "Recolours the whole window. Each one comes dark and light."
+    const val THEME_CUSTOM = "Your own colours. Opens the editor."
+    const val THEME_MODE = "The same theme, dark or light."
+
     // The download page.
     const val DL_OPTIONS = "Format, quality, cover art, and what to cut or keep."
     const val DL_SIGN_IN = "Shows the YouTube sign-in, for when YouTube refuses downloads."
