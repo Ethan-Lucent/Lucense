@@ -28,6 +28,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -158,6 +159,8 @@ private fun lucense(args: Array<String>) = application {
 
     // -Dlucense.window=900x600 starts at another size: for checking how a small window looks.
     val startSize = System.getProperty("lucense.window")?.split('x')?.mapNotNull { it.trim().toIntOrNull() }?.takeIf { it.size == 2 }
+    // The main window itself, for the windows that belong to it (Trim).
+    var mainAwt by remember { mutableStateOf<java.awt.Window?>(null) }
     val mainWindow = rememberWindowState(width = (startSize?.get(0) ?: 1280).dp, height = (startSize?.get(1) ?: 820).dp)
     val shortcuts = remember(controller) { WindowShortcuts(controller.shortcutActions()) }
     // The other windows - the mini player, the lyrics - get the playing keys only.
@@ -179,6 +182,7 @@ private fun lucense(args: Array<String>) = application {
         onKeyEvent = shortcuts::bubble
     ) {
         EveryIconSize()
+        LaunchedEffect(Unit) { mainAwt = window }
         // The smallest window the scaled layout still fits in.
         LaunchedEffect(Unit) { window.minimumSize = Dimension(760, 500) }
         // Asked to the front - from the tray, the mini player, or a second start.
@@ -256,7 +260,8 @@ private fun lucense(args: Array<String>) = application {
     }
 
     controller.trimming?.let { track ->
-        TrimWindow(controller, track) { controller.trimming = null }
+        // Owned by the main window, so it stays in front of it; another song's Trim is a new window.
+        key(track.file) { TrimWindow(controller, track, mainAwt) { controller.trimming = null } }
     }
 
     if (controller.lyricsFullscreen) {

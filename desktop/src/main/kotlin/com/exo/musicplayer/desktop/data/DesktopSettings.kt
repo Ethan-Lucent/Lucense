@@ -191,6 +191,15 @@ class DesktopSettings {
         get() = prefs.get(KEY_MINI_PLAYER_AT, "")
         set(value) = prefs.put(KEY_MINI_PLAYER_AT, value)
 
+    /**
+     * Where the Trim window was left, and how big: "x,y,width,height" in the units the
+     * window system uses; empty for beside the main window's side panel. Checked against
+     * the screens before it is used, so a monitor that has gone doesn't strand it.
+     */
+    var trimWindowAt: String
+        get() = prefs.get(KEY_TRIM_WINDOW_AT, "")
+        set(value) = prefs.put(KEY_TRIM_WINDOW_AT, value)
+
     /** Whether the window is drawn as liquid glass. */
     var glass: Boolean
         get() = prefs.getBoolean(KEY_GLASS, false)
@@ -453,6 +462,7 @@ class DesktopSettings {
         const val KEY_KEEP_IN_TRAY = "keep_in_tray"
         const val KEY_TRAY_MINI_PLAYER = "tray_mini_player"
         const val KEY_MINI_PLAYER_AT = "mini_player_at"
+        const val KEY_TRIM_WINDOW_AT = "trim_window_at"
         const val KEY_DUCK_ENABLED = "duck_enabled"
         const val KEY_DUCK_KEY = "duck_key"
         const val KEY_DUCK_PERCENT = "duck_percent"
