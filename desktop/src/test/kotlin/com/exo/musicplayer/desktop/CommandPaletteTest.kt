@@ -9,6 +9,7 @@ import com.exo.musicplayer.desktop.ui.PaletteSearch
 import com.exo.musicplayer.desktop.ui.PaletteSection
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -46,12 +47,21 @@ class CommandPaletteTest {
     }
 
     @Test
-    fun anEmptyBoxShowsTheFewStartersAndATipButNoSongs() {
+    fun anEmptyBoxShowsTheFewStartersButNoSongsAndNoTipRow() {
         val items = listOf(
             item(PaletteSection.ACTIONS, "Play or pause"), song("Anything"), item(PaletteSection.PAGES, "Library"),
             item(PaletteSection.PAGES, "Albums"), item(PaletteSection.ACTIONS, "Rescan library")
         )
-        assertEquals(listOf("Play or pause", "Library", PaletteSearch.TIP), titles("  ", items))
+        // The usage notice is the palette's fixed footer, not a row to scroll to or pick.
+        assertEquals(listOf("Play or pause", "Library"), titles("  ", items))
+    }
+
+    @Test
+    fun theFooterTextsAreWrittenAndTheLinkOneDiffers() {
+        assertTrue(PaletteSearch.TIP.isNotBlank())
+        assertTrue(PaletteSearch.LINK_TIP.isNotBlank())
+        assertTrue(PaletteSearch.KEY_HINTS.isNotBlank())
+        assertNotEquals(PaletteSearch.TIP, PaletteSearch.LINK_TIP)
     }
 
     @Test

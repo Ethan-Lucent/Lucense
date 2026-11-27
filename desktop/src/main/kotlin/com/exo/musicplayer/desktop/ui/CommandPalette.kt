@@ -146,7 +146,15 @@ internal object PaletteSearch {
         "Play or pause", "Next song", "Previous song", "Shuffle",
         "Library", "Playlists", "Discover", "Identify", "Download", "Settings"
     )
+
+    /** The fixed bottom line of the palette: what the box is for. Not a row, so it can't scroll away or be picked. */
     const val TIP = "Type to find songs, albums, artists, settings and more"
+
+    /** The same line while the box holds a link, where the rows are what to do with it. */
+    const val LINK_TIP = "Pick what to do with this link"
+
+    /** Keys the box answers to, shown small and faint at the right of the bottom line. */
+    const val KEY_HINTS = "↑↓ move · Enter open · Esc close"
 
     /** 0 for no match; higher is better. */
     fun score(query: String, item: PaletteItem): Int {
@@ -167,7 +175,7 @@ internal object PaletteSearch {
         }
     }
 
-    /** [items] for [query]: an empty one gives the short starter list and a line on typing, and no songs. */
+    /** [items] for [query]: an empty one gives the short starter list, and no songs. */
     fun rank(query: String, items: List<PaletteItem>): List<PaletteItem> {
         val folded = NameSearch.fold(query).trim().replace(SPACES, " ")
         if (folded.isEmpty()) {
@@ -177,7 +185,7 @@ internal object PaletteSearch {
                         (it.title == name || (name == "Shuffle" && it.title.startsWith("Shuffle ")))
                 }
             }
-            return starters + PaletteItem(PaletteSection.SEARCH, TIP, icon = Icons.Default.Search)
+            return starters
         }
         val words = folded.split(' ')
         val bySection = HashMap<PaletteSection, MutableList<Pair<PaletteItem, Int>>>()
@@ -396,6 +404,7 @@ fun CommandPalette(
             }
             if (results.isNotEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(horizontal = 6.dp).height(1.dp).background(Palette.Line))
+                // Keeps its max height, so the card doesn't grow; the footer below always has room.
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp).padding(top = 4.dp), state = list) {
                     itemsIndexed(results) { index, item ->
                         if (index == 0 || results[index - 1].section != item.section) {
@@ -409,6 +418,29 @@ fun CommandPalette(
                         PaletteRow(item, index == selected, onHover = { selected = index }) { runAndClose(item) }
                     }
                 }
+            }
+            // Pinned under the list rather than being its last row, so it is in sight however long the list is.
+            // It sits on the card's own fill, so it looks the same with glass on or off.
+            Box(Modifier.fillMaxWidth().padding(horizontal = 6.dp).height(1.dp).background(Palette.Line))
+            Row(
+                Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (PaletteLinks.urlOf(text) != null) PaletteSearch.LINK_TIP else PaletteSearch.TIP,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Palette.TextFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    PaletteSearch.KEY_HINTS,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Palette.TextFaint,
+                    maxLines = 1
+                )
             }
         }
     }
