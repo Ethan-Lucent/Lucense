@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -123,6 +125,9 @@ internal fun NavigationRail(
             Spacer(Modifier.height(10.dp))
             RailSearch(compact) { controller.openPalette() }
             Spacer(Modifier.height(8.dp))
+            // Scrolls on its own so a short window never pushes Settings off the
+            // bottom; the pages are the part that can outgrow it.
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             railGroups().forEachIndexed { index, group ->
                 if (index > 0) RailDivider()
                 // Starts as it was left, and open when you are on one of its pages or
@@ -164,7 +169,7 @@ internal fun NavigationRail(
                 }
             }
 
-            Spacer(Modifier.weight(1f))
+            }
             RailItem("Settings", Icons.Default.Settings, settingsOpen, compact = compact, onClick = onSettings)
             Spacer(Modifier.height(10.dp))
         }
