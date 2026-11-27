@@ -11,7 +11,9 @@ data class BulkJob(
     val skipped: Int = 0,
     val failed: Int = 0,
     val current: String = "",
-    val finishedNote: String? = null
+    val finishedNote: String? = null,
+    /** Ended by Stop rather than by running out of songs. */
+    val stopped: Boolean = false
 ) {
     val progress: Float get() = if (total > 0) done.toFloat() / total else 0f
 }

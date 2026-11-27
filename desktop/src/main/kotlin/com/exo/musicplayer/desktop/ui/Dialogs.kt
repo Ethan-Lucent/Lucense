@@ -297,6 +297,20 @@ private fun JobProgress(controller: DesktopController, job: BulkJob) {
                     color = Palette.Accent
                 )
             }
+            // After Stop, the songs it got through are marked done and the rest are not,
+            // so running again carries on with exactly the rest.
+            if (controller.canRunBulkAgain) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Run it again to carry on with the rest.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Palette.TextFaint,
+                        modifier = Modifier.weight(1f)
+                    )
+                    GhostButton("Run again") { controller.runBulkAgain() }
+                }
+            }
             if (job.running && job.skipped > 0) {
                 Text(
                     "${job.skipped} skipped as already done",

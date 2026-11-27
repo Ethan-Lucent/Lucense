@@ -29,6 +29,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.exo.musicplayer.desktop.data.DesktopController
 import com.exo.musicplayer.desktop.data.DownloadEntry
+import com.exo.musicplayer.desktop.data.bulkChipText
 
 /**
  * One run of sidebar pages. [label] is the tiny heading over it (null for the
@@ -85,7 +89,10 @@ internal fun NavigationRail(
     current: Destination?,
     settingsOpen: Boolean,
     onSelect: (Destination) -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    /** Whether the Bulk tools dialog is showing (it shows the progress itself, so no chip). */
+    bulkOpen: Boolean = false,
+    onOpenBulk: () -> Unit = {}
 ) {
     Box(
         Modifier
@@ -171,8 +178,93 @@ internal fun NavigationRail(
             }
 
             }
+            RailBulk(controller, compact, bulkOpen, onOpenBulk)
             RailItem("Settings", Icons.Default.Settings, settingsOpen, compact = compact, note = Notes.RAIL_SETTINGS, onClick = onSettings)
             Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+/**
+ * The bulk run's status, for when its dialog is closed: the run keeps going
+ * without it, and this is how it stays visible and stoppable.
+ *
+ * Shows "Lyrics 120 / 400" with a thin bar and a stop button while it runs;
+ * clicking opens the Bulk tools dialog. When the run ends with the dialog
+ * closed it keeps the result for ten seconds, or until clicked or dismissed.
+ */
+@Composable
+private fun RailBulk(controller: DesktopController, compact: Boolean, dialogOpen: Boolean, onOpen: () -> Unit) {
+    val job = controller.bulk
+    val dialogNow by rememberUpdatedState(dialogOpen)
+    var finished by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(job.running) {
+        if (job.running) {
+            finished = null
+        } else if (job.finishedNote != null && !dialogNow) {
+            finished = bulkChipText(job)
+            delay(10_000)
+            finished = null
+        }
+    }
+    if (dialogOpen || !(job.running || finished != null)) return
+    val text = if (job.running) bulkChipText(job) else finished.orEmpty()
+    val open = { finished = null; onOpen() }
+
+    if (compact) {
+        // No room for words: a small ring, the same text in its tooltip.
+        Noted(text, "Click to open Bulk tools", iconOnly = true) {
+            Box(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable(onClick = open),
+                contentAlignment = Alignment.Center
+            ) {
+                if (job.running) {
+                    CircularProgressIndicator(
+                        progress = { job.progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.size(18.dp),
+                        color = Palette.Accent,
+                        strokeWidth = 2.dp,
+                        trackColor = Palette.Line
+                    )
+                } else {
+                    Icon(Icons.Default.Check, text, Modifier.size(16.dp), tint = Palette.Accent)
+                }
+            }
+        }
+        return
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Palette.Well)
+            .clickable(onClick = open)
+            .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (job.running) Palette.TextDim else Palette.Accent,
+                maxLines = if (job.running) 1 else 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Noted("Stop".takeIf { job.running } ?: "Dismiss", null, iconOnly = true) {
+                Box(
+                    Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .clickable { if (job.running) controller.cancelBulk() else finished = null },
+                    contentAlignment = Alignment.Center
+                ) { Icon(Icons.Default.Close, if (job.running) "Stop" else "Dismiss", Modifier.size(14.dp), tint = Palette.TextFaint) }
+            }
+        }
+        if (job.running) {
+            Spacer(Modifier.height(5.dp))
+            ThinProgress(job.progress, Modifier.padding(end = 6.dp))
         }
     }
 }
