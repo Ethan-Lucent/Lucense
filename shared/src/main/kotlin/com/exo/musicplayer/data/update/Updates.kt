@@ -11,8 +11,9 @@ object Updates {
      * Every release, newest first, rather than /releases/latest: these builds go
      * out as pre-releases, which that endpoint leaves out entirely.
      */
-    private const val RELEASES =
-        "https://api.github.com/repos/MythicalFentWizard/Lucense/releases?per_page=5"
+    const val REPOSITORY = "Ethan-Lucent/Lucense"
+
+    const val RELEASES = "https://api.github.com/repos/$REPOSITORY/releases?per_page=5"
 
     private val TAG = Regex("\"tag_name\"\\s*:\\s*\"v?([0-9]+(?:\\.[0-9]+)*)\"")
     private val PAGE = Regex("\"html_url\"\\s*:\\s*\"(https://github\\.com/[^\"]*/releases/tag/[^\"]+)\"")
@@ -21,7 +22,7 @@ object Updates {
         val body = Http.get(RELEASES, mapOf("Accept" to "application/vnd.github+json")) ?: return null
         val version = TAG.find(body)?.groupValues?.get(1) ?: return null
         val page = PAGE.find(body)?.groupValues?.get(1)
-            ?: "https://github.com/MythicalFentWizard/Lucense/releases"
+            ?: "https://github.com/$REPOSITORY/releases"
         return Release(version, page)
     }
 
