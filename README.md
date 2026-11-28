@@ -36,6 +36,12 @@ subscription; every service it talks to is one that answers without them.
   one won't install, the plain one will. The APK is debug-signed, so Android asks
   you to allow installs from whichever app you opened it with.
 
+**Updating.** Lucense can update itself by downloading only the files that
+changed (Settings → About → Updates); when it starts it offers a new version in a
+small card ("Update now" installs and restarts in one click; the setting to turn
+that off is in the same place); the full installers remain available. How
+a release is made for that is in [docs/UPDATES.md](docs/UPDATES.md).
+
 ---
 
 ## What it does

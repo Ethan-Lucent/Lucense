@@ -39,6 +39,7 @@ import com.exo.musicplayer.data.lyrics.LrcLibProvider
 import com.exo.musicplayer.data.lyrics.LyricsFetch
 import com.exo.musicplayer.data.lyrics.LyricsOvhProvider
 import com.exo.musicplayer.data.lyrics.LyricsProviderChain
+import com.exo.musicplayer.data.lyrics.LyricsRunMemo
 import com.exo.musicplayer.data.lyrics.LyricsTerm
 import com.exo.musicplayer.data.lyrics.NeteaseLyricsProvider
 import com.exo.musicplayer.data.lyrics.tidyLyrics
@@ -62,6 +63,10 @@ import com.exo.musicplayer.data.playlist.ImportResult
 import com.exo.musicplayer.data.playlist.PlaylistEntry
 import com.exo.musicplayer.data.playlist.PlaylistFile
 import com.exo.musicplayer.data.update.Updates
+import com.exo.musicplayer.desktop.update.InstallLayout
+import com.exo.musicplayer.desktop.update.UpdateController
+import com.exo.musicplayer.desktop.update.UpdateNotice
+import com.exo.musicplayer.desktop.update.UpdateState
 import com.exo.musicplayer.data.weather.Affinity
 import com.exo.musicplayer.data.weather.GeoPlace
 import com.exo.musicplayer.data.weather.OpenMeteo
@@ -1879,30 +1884,62 @@ class DesktopController(parent: CoroutineScope) {
 
     // ---- Updates --------------------------------------------------------------
 
-    var update by mutableStateOf<Updates.Release?>(null)
+    /**
+     * The in-app updater: finds a newer release, downloads only the files that
+     * changed (when the user asks), and hands over to a helper that swaps them
+     * in and starts Lucense again. A copy it can't update in place (a run from
+     * Gradle, a layout it doesn't recognise) keeps the release-page link.
+     */
+    val updater = UpdateController(
+        scope = scope,
+        currentVersion = AppVersion.name,
+        layout = InstallLayout.detect(),
+        updatesRoot = File(AppDirs.root, "update"),
+        findProgram = { Platform.onPath(it) },
+        exitApp = { exitRequested = true }
+    )
+
+    val updateState: UpdateState get() = updater.state
+
+    private val updateNoticeState = mutableStateOf(settings.updateNotice)
+
+    /**
+     * Whether Lucense looks for a newer version when it starts and offers it
+     * in a card. Off: no look-up at launch (no network traffic) and no card;
+     * "Check now" and the Settings row work as ever.
+     */
+    var updateNotice: Boolean
+        get() = updateNoticeState.value
+        set(value) {
+            updateNoticeState.value = value
+            settings.updateNotice = value
+        }
+
+    /** The launch card: when to show it, and what its buttons do. */
+    val announcer = UpdateNotice(
+        updater = updater,
+        settingOn = { updateNotice },
+        skippedVersion = { settings.updateSkipped },
+        saveSkipped = { settings.updateSkipped = it }
+    )
+
+    /** Set once the update helper is running: the window quits on it (Main.kt). */
+    var exitRequested by mutableStateOf(false)
         private set
-    var updateNote by mutableStateOf<String?>(null)
-        private set
-    var updateChecking by mutableStateOf(false)
-        private set
+
+    val update: Updates.Release? get() = updater.release?.legacy
+    val updateNote: String? get() = updater.note
+    val updateChecking: Boolean get() = updater.state is UpdateState.Checking
 
     /** Whether what was found is actually newer than what is running. */
     val updateReady: Boolean
         get() = update?.let { Updates.isNewer(it.version, AppVersion.name) } == true
 
     fun checkForUpdate(announce: Boolean = false) {
-        if (updateChecking) return
-        updateChecking = true
-        scope.launch {
-            val newest = io { Updates.newest() }
-            updateChecking = false
-            update = newest
-            updateNote = when {
-                newest == null -> "Could not reach GitHub."
-                Updates.isNewer(newest.version, AppVersion.name) -> "Version ${newest.version} is out."
-                else -> "Up to date."
+        updater.check { newest ->
+            if (announce && newest != null && Updates.isNewer(newest.version, AppVersion.name)) {
+                dropNote = "Lucense ${newest.version} is out — see Settings."
             }
-            if (announce && updateReady) dropNote = "Lucense ${newest?.version} is out — see Settings."
         }
     }
 
@@ -3191,10 +3228,17 @@ class DesktopController(parent: CoroutineScope) {
 
             // Identifying decodes audio, so it stays one at a time. Only a song that got
             // an answer is marked (workThroughQueue): a failed lookup is tried again next run.
+            // Lyrics pace each service on its own (the chain's ProviderPacer), so more songs
+            // go at once and no worker rests between them.
+            val memo = LyricsRunMemo()
             val tally = workThrough(
                 queue,
-                workers = if (kind == BulkKind.IDENTIFY) 1 else SONGS_AT_ONCE,
-                paceMs = if (kind in ONLINE) BULK_PACE_MS else 0L,
+                workers = when (kind) {
+                    BulkKind.IDENTIFY -> 1
+                    BulkKind.LYRICS -> LYRICS_AT_ONCE
+                    else -> SONGS_AT_ONCE
+                },
+                paceMs = if (kind in ONLINE && kind != BulkKind.LYRICS) BULK_PACE_MS else 0L,
                 afterEach = { track ->
                     if (column != null) io { store.mark(track.file.absolutePath, column) }
                 }
@@ -3202,7 +3246,7 @@ class DesktopController(parent: CoroutineScope) {
                 when (kind) {
                     BulkKind.COVERS -> bulkCover(track)
                     BulkKind.TAGS -> bulkTags(track, names, tags)
-                    BulkKind.LYRICS -> bulkLyrics(track)
+                    BulkKind.LYRICS -> bulkLyrics(track, memo = memo)
                     BulkKind.IDENTIFY -> bulkIdentify(track)
                     BulkKind.REPAIR -> bulkRepair(track)
                     BulkKind.LEVELS -> bulkLevel(track)
@@ -3655,10 +3699,14 @@ class DesktopController(parent: CoroutineScope) {
      * alone unless [keepStored] is off, which Fix does: picking a song out is
      * the instruction to look again.
      */
-    private suspend fun bulkLyrics(track: DesktopTrack, keepStored: Boolean = true): BulkOutcome {
+    private suspend fun bulkLyrics(
+        track: DesktopTrack,
+        keepStored: Boolean = true,
+        memo: LyricsRunMemo? = null
+    ): BulkOutcome {
         val (title, artist) = lyricsQueryFor(track)
         return lyricsStep(
-            lyricsChain, store, track.file.absolutePath, title, artist, track.album, track.durationMs, keepStored
+            lyricsChain, store, track.file.absolutePath, title, artist, track.album, track.durationMs, keepStored, memo
         )
     }
 
@@ -5014,7 +5062,10 @@ class DesktopController(parent: CoroutineScope) {
         refreshFileTypes()
         applyDiscord()
         refreshRecentlyPlayed()
-        checkForUpdate(announce = true)
+        // What the last update came to, said once; then the usual look for a newer one.
+        updater.startup()?.let { announcer.showResult(it, updater.lastResultOk != false) }
+        // Setting off: no look-up at all, so nothing goes over the network.
+        announcer.launchLookup()
         refreshBackups()
         watcher.watch(roots())
         rescan()
@@ -5083,6 +5134,13 @@ private const val SONGS_AT_ONCE = 5
 
 /** A breath between one worker's songs for the tools that ask online services, so they aren't hammered. */
 private const val BULK_PACE_MS = 250L
+
+/**
+ * How many songs the Lyrics tool looks up at once. Each one mostly waits on the
+ * network, and every service is held to its own request rate whatever this is,
+ * so more in flight is faster without asking any service harder than its pacing.
+ */
+private const val LYRICS_AT_ONCE = 10
 
 /** The tools that ask services online. */
 private val ONLINE = setOf(BulkKind.COVERS, BulkKind.TAGS, BulkKind.LYRICS, BulkKind.IDENTIFY)

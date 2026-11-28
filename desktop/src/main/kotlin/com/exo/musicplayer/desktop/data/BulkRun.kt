@@ -2,6 +2,7 @@ package com.exo.musicplayer.desktop.data
 
 import com.exo.musicplayer.data.lyrics.LyricsFetch
 import com.exo.musicplayer.data.lyrics.LyricsProviderChain
+import com.exo.musicplayer.data.lyrics.LyricsRunMemo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -223,10 +224,12 @@ internal suspend fun lyricsStep(
     artist: String?,
     album: String?,
     durationMs: Long,
-    keepStored: Boolean = true
+    keepStored: Boolean = true,
+    /** The run's answers so far, so a song held twice is looked up once. */
+    memo: LyricsRunMemo? = null
 ): BulkOutcome {
     if (keepStored && withContext(Dispatchers.IO) { store.lyricsFor(path) } != null) return BulkOutcome.ALREADY_HAD
-    val (result, provider) = chain.fetch(title, artist, album, durationMs)
+    val (result, provider) = chain.fetch(title, artist, album, durationMs, memo)
     val outcome = lyricsOutcome(result)
     if (result is LyricsFetch.Found) {
         withContext(Dispatchers.IO) { store.saveLyrics(path, result.plain, result.synced, provider ?: "unknown") }

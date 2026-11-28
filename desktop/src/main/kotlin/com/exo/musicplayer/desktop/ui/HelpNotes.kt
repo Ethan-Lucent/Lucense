@@ -113,6 +113,20 @@ object Notes {
     // The download page.
     const val DL_OPTIONS = "Format, quality, cover art, and what to cut or keep."
     const val DL_SIGN_IN = "Shows the YouTube sign-in, for when YouTube refuses downloads."
+
+    // Settings > About, updates.
+    const val UPDATE_DELTA = "Downloads only the files that changed. Nothing changes until you restart."
+    const val UPDATE_FULL = "Opens the release page, with the full installer."
+    const val UPDATE_CHECK = "Looks for a newer version now."
+    const val UPDATE_RESTART = "Closes Lucense, puts the new files in place and opens it again. If anything goes wrong, your old version is put back."
+    const val UPDATE_LATER = "Keeps the download. It is installed only when you choose Restart to update."
+    const val UPDATE_CANCEL = "Stops the download. What has already arrived is kept for next time."
+    const val UPDATE_RETRY = "Tries the update again."
+    const val UPDATE_NOTICE = "Looks for a newer version when Lucense starts and offers to install it. Off: it doesn't look until you press Check now."
+    const val NOTICE_UPDATE = "Downloads only the files that changed, then closes Lucense, installs them and opens it again. If anything goes wrong, your old version is put back."
+    const val NOTICE_LATER = "Hides this until the next time Lucense starts."
+    const val NOTICE_SKIP = "Stays quiet about this version. A newer one is announced again."
+    const val NOTICE_NOT_NOW = "Keeps the download and closes this. Settings, About has the button when you want it."
 }
 
 /**

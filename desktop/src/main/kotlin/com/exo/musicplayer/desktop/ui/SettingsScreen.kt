@@ -155,6 +155,7 @@ internal val settingsIndex: List<SettingEntry> = buildList {
     add(SettingEntry("Show what you're playing on Discord", "rich presence, sharing", links))
     add(SettingEntry("Keyboard shortcuts", "keys, hotkeys", SettingsTab.KEYS))
     add(SettingEntry("Updates", "check for a new version", SettingsTab.ABOUT))
+    add(SettingEntry("Tell me when an update is available", "update notice, new version at start, launch, notification, off", SettingsTab.ABOUT))
     add(SettingEntry("Backups", "back up favourites and playlists, restore", SettingsTab.ABOUT))
     add(SettingEntry("Data folder", "where Lucense keeps its files", SettingsTab.ABOUT))
     add(SettingEntry("Logs", "log files for bug reports", SettingsTab.ABOUT, true))
@@ -1007,17 +1008,7 @@ private fun AboutSettings(controller: DesktopController) {
             GhostButton("Riff on GitHub") { openLink("https://github.com/rootscripts/riff") }
         }
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Updates", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
-                Hint(controller.updateNote ?: "Looked up when Lucense starts.")
-            }
-            controller.update?.takeIf { controller.updateReady }?.let { release ->
-                AccentButton("Get ${release.version}") { openLink(release.url) }
-                Spacer(Modifier.width(8.dp))
-            }
-            GhostButton("Check now", enabled = !controller.updateChecking) { controller.checkForUpdate() }
-        }
+        UpdateRow(controller, ::openLink)
         Spacer(Modifier.height(16.dp))
         Text("Backups", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
         Spacer(Modifier.height(4.dp))

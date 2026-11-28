@@ -1,5 +1,6 @@
 package com.exo.musicplayer.desktop
 
+import com.exo.musicplayer.data.net.Http
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.runtime.CompositionLocalProvider
@@ -97,6 +98,8 @@ import com.exo.musicplayer.desktop.system.Platform
  * animations and shadow.
  */
 fun main(args: Array<String>) {
+    // Before the first connection anywhere: the JDK reads its keep-alive pool size once.
+    Http.keepConnections()
     // Already running - perhaps out of sight in the tray: that one takes the
     // files and comes to the front, and this one goes.
     if (SingleInstance.handOver(args)) return
@@ -144,6 +147,19 @@ private fun lucense(args: Array<String>) = application {
     val quitMain: () -> Unit = {
         val fade = mainFade
         if (fade != null && controller.windowShown) fade.fadeOut(onDone = ::exitApplication) else exitApplication()
+    }
+
+    // The update helper is running and waits for this process to end before it
+    // swaps the files: quit, the usual way (the library and settings are saved
+    // as on any quit). Should something hold the JVM open, it is ended after 40
+    // seconds, well inside the helper's 60-second wait.
+    LaunchedEffect(controller.exitRequested) {
+        if (!controller.exitRequested) return@LaunchedEffect
+        Thread({
+            Thread.sleep(40_000)
+            Runtime.getRuntime().halt(0)
+        }, "update-exit").apply { isDaemon = true }.start()
+        quitMain()
     }
 
     // Lucense started again while this one runs: show this one, and play what it was opened with.
