@@ -84,8 +84,8 @@ function ConvertTo-JsonText([string]$Text) {
 }
 
 function Write-Result([bool]$Ok, [string]$Message) {
-    $folder = Split-Path -Parent $Result
-    if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+    $folder = [System.IO.Path]::GetDirectoryName($Result)
+    if (-not (Test-Path -LiteralPath $folder)) { [void][System.IO.Directory]::CreateDirectory($folder) }
     if ($Ok) {
         $json = '{"ok":true,"version":"' + $Version + '"}'
     } else {
@@ -165,8 +165,8 @@ function Invoke-Swap($Lines) {
         if (Test-Path -LiteralPath $dest) {
             if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) { throw ($line.Path + ' in the install is not a plain file.') }
             $copy = Join-Path $Backup ($line.Path.Replace('/', '\'))
-            $copyFolder = Split-Path -Parent $copy
-            if (-not (Test-Path -LiteralPath $copyFolder)) { New-Item -ItemType Directory -Path $copyFolder -Force | Out-Null }
+            $copyFolder = [System.IO.Path]::GetDirectoryName($copy)
+            [void][System.IO.Directory]::CreateDirectory($copyFolder)
             Copy-Item -LiteralPath $dest -Destination $copy -Force
             [void]$BackedUp.Add($line.Path)
         } elseif (-not $line.Stale) {
@@ -180,12 +180,12 @@ function Invoke-Swap($Lines) {
             Remove-Quietly $dest
             continue
         }
-        $folder = Split-Path -Parent $dest
+        $folder = [System.IO.Path]::GetDirectoryName($dest)
         $missing = New-Object System.Collections.Generic.List[string]
         $probe = $folder
-        while (-not (Test-Path -LiteralPath $probe)) { $missing.Add($probe); $probe = Split-Path -Parent $probe }
+        while (-not (Test-Path -LiteralPath $probe)) { $missing.Add($probe); $probe = [System.IO.Path]::GetDirectoryName($probe) }
         foreach ($made in $missing) { $Folders.Add($made) }
-        if ($missing.Count -gt 0) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+        if ($missing.Count -gt 0) { [void][System.IO.Directory]::CreateDirectory($folder) }
         $Touched.Add($line.Path)
         $new = $dest + '.lucense-new'
         Remove-Quietly $new
@@ -255,7 +255,7 @@ function Invoke-Update {
     if (Test-Path -LiteralPath $Backup) {
         Move-Item -LiteralPath $Backup -Destination ($Backup + '-' + [DateTime]::UtcNow.Ticks)
     }
-    New-Item -ItemType Directory -Path $Backup -Force | Out-Null
+    [void][System.IO.Directory]::CreateDirectory($Backup)
     $failure = $null
     try {
         $lines = Read-Plan

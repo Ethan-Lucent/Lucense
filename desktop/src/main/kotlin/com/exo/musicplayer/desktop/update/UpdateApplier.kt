@@ -240,9 +240,15 @@ object UpdateApplier {
         }
     }
 
+    /** The helper's last word: from its output, or from the log the PowerShell one keeps per mode. */
     private fun lastLogLine(staging: File): String =
-        runCatching { File(staging, LOG).readLines().lastOrNull { it.isNotBlank() } }.getOrNull()
-            ?.removePrefix("apply-update: ")?.take(300) ?: "no reason given"
+        runCatching {
+            staging.listFiles().orEmpty()
+                .filter { it.name.startsWith("apply") && it.name.endsWith(".log") && it.length() > 0 }
+                .maxByOrNull { it.lastModified() }
+                ?.readLines()?.lastOrNull { it.isNotBlank() }
+        }.getOrNull()
+            ?.substringAfter("apply-update: ")?.take(300) ?: "no reason given"
 
     /** result.json as the helper wrote it, or null if there is none or it can't be read. */
     fun readResult(file: File): ApplyResult? = runCatching {
