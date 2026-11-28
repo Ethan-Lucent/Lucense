@@ -169,6 +169,38 @@ object YtDlp {
     }
 
     /**
+     * The arguments that tag a download and put its cover in: metadata, the
+     * artist/title tidy-up, the thumbnail and SponsorBlock. Only for when ffmpeg
+     * is there: metadata and cover art only survive the container with ffmpeg
+     * to rewrite it.
+     *
+     * [windows] is how the thumbnail crop is quoted, and has to follow the
+     * system the process is started on. It used to be fixed at Windows' form,
+     * and on Linux that form reaches ffmpeg with stray quote marks: the
+     * thumbnail conversion failed ("Error opening output files"), yt-dlp
+     * embedded nothing, and every download arrived with no cover.
+     */
+    internal fun tidyArguments(
+        format: DownloadFormat?,
+        embedThumbnail: Boolean,
+        cutNonMusic: Boolean,
+        ffmpeg: File,
+        windows: Boolean = Platform.isWindows
+    ): List<String> = buildList {
+        add("--ffmpeg-location")
+        add(ffmpeg.absolutePath)
+        add("--embed-metadata")
+        addAll(YtDlpTidy.TAGS)
+        // WAV has no room for a cover; "keep the original" (no format) is tried,
+        // and a container that refuses is caught by the cover lookup afterwards.
+        if (embedThumbnail && format?.holdsCover != false) {
+            add("--embed-thumbnail")
+            addAll(YtDlpTidy.squareCover(windows))
+        }
+        if (cutNonMusic) addAll(YtDlpTidy.NON_MUSIC_CUT)
+    }
+
+    /**
      * Runs one download.
      *
      * Output lands in a private empty directory first and is moved out on
@@ -215,18 +247,7 @@ object YtDlp {
                     command += listOf("-x", "--audio-format", format.ytDlp)
                     if (format.lossy) command += listOf("--audio-quality", quality.audioQuality)
                 }
-                if (ffmpeg.isFile) {
-                    command += listOf("--ffmpeg-location", ffmpeg.absolutePath)
-                    // Metadata and cover art only survive the container with
-                    // ffmpeg available to rewrite it.
-                    command += "--embed-metadata"
-                    command += YtDlpTidy.TAGS
-                    if (embedThumbnail && format?.holdsCover != false) {
-                        command += "--embed-thumbnail"
-                        command += YtDlpTidy.squareCover(windows = true)
-                    }
-                    if (cutNonMusic) command += YtDlpTidy.NON_MUSIC_CUT
-                }
+                if (ffmpeg.isFile) command += tidyArguments(format, embedThumbnail, cutNonMusic, ffmpeg)
                 command += ytDlpJsEngine()
                 command += NetworkProxy.ytDlpArgs()
                 command += YouTubeSignIn.ytDlpArgs()

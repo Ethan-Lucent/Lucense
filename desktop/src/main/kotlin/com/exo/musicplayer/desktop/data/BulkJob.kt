@@ -8,6 +8,8 @@ data class BulkJob(
     val done: Int = 0,
     val updated: Int = 0,
     val alreadyHad: Int = 0,
+    /** Checked and definitely nothing there: marked, unlike [failed]. */
+    val nothing: Int = 0,
     val skipped: Int = 0,
     val failed: Int = 0,
     val current: String = "",

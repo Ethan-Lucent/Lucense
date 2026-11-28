@@ -474,6 +474,11 @@ private fun DownloadRow(entry: DownloadEntry, onSignIn: (() -> Unit)?, onRetry: 
             }
         }
 
+        entry.cover?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, style = MaterialTheme.typography.labelSmall, color = Palette.TextFaint)
+        }
+
         if (entry.failed) {
             Spacer(Modifier.height(6.dp))
             Text(entry.status, style = MaterialTheme.typography.labelSmall, color = Palette.TextDim)

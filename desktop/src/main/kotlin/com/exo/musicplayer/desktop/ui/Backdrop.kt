@@ -53,8 +53,6 @@ import com.exo.musicplayer.desktop.audio.SongShape
 import kotlin.math.log10
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import org.jetbrains.skia.FilterBlurMode
-import org.jetbrains.skia.MaskFilter
 import org.jetbrains.skia.RuntimeEffect
 import org.jetbrains.skia.RuntimeShaderBuilder
 import kotlin.math.PI
@@ -441,6 +439,7 @@ private fun Animated(
     val seconds = remember { mutableFloatStateOf(0f) }
     val pulse = remember(spectrum) { Pulse(spectrum?.bands() ?: 14) }
     val place = remember { Placement() }
+    val guard = remember { FrameGuard() }
     val focused = LocalWindowInfo.current.isWindowFocused || !pauseWhenUnfocused
     val moving = style == BackdropStyle.REACTIVE || style == BackdropStyle.WAVES
     // Null unless this style listens, so the tick has one thing to test.
@@ -452,6 +451,8 @@ private fun Animated(
         // Reactive with nothing to listen to never changes: drawn once, it's done.
         if (style == BackdropStyle.REACTIVE && analyser == null) return@LaunchedEffect
         val origin = System.nanoTime() - (seconds.floatValue * 1e9f).toLong()
+        // Resuming after a pause is not a slow frame.
+        guard.restart()
         val raw = FloatArray(spectrum?.bands() ?: 1)
         var lastTick = 0L
         // Ticks in a row that changed nothing to see.
@@ -498,7 +499,10 @@ private fun Animated(
                 // a second frame to show.
                 val wait = (FRAME_NANOS - (System.nanoTime() - lastTick)) / 1_000_000L - FRAME_SLACK_MS
                 if (wait > 0) delay(wait)
-                withFrameNanos { advance() }
+                withFrameNanos { frameNanos ->
+                    guard.frame(frameNanos)
+                    advance()
+                }
                 lastTick = System.nanoTime()
             } else {
                 delay(50L)
@@ -531,7 +535,7 @@ private fun Animated(
                         BackdropStyle.SNOW -> snow(t, color, motes)
                         BackdropStyle.WAVES ->
                             if (graph != null && graph.active && graph.filled > 0) {
-                                songGraph(color, graph, if (listening) pulse else null, place)
+                                songGraph(color, graph, if (listening) pulse else null, place, guard.reduced)
                             } else {
                                 ribbon(t, color, if (listening) pulse else null, place)
                             }
@@ -544,6 +548,64 @@ private fun Animated(
                 }
             }
     )
+}
+
+/**
+ * Watches how long the frames really take and says when to draw less.
+ *
+ * A background is only decoration: when the window is too big, or the machine
+ * too slow, for its full effect to be drawn in time, the whole window stalls
+ * behind it, which is the worst a backdrop can do. Three frames in a row that
+ * each took over [slowNanos] (about twenty a second) switch to [reduced] drawing
+ * for a few seconds, then full drawing is tried again; each failed try doubles
+ * the wait, up to half a minute, and half a minute of coping resets it. A single
+ * long frame (a garbage collection, say) changes nothing.
+ */
+internal class FrameGuard(private val slowNanos: Long = 45_000_000L) {
+    /** Whether to draw the cheaper picture right now. */
+    var reduced = false
+        private set
+    private var last = 0L
+    private var slowRun = 0
+    private var holdNanos = HOLD_MIN
+    private var until = 0L
+    private var fullSince = 0L
+
+    /** The clock stopped for a while (the window lost focus, say): the next frame's gap says nothing. */
+    fun restart() {
+        last = 0L
+        slowRun = 0
+    }
+
+    /** A frame was shown at [nanos] on the frame clock. */
+    fun frame(nanos: Long) {
+        val gap = if (last == 0L) 0L else nanos - last
+        last = nanos
+        if (fullSince == 0L) fullSince = nanos
+        if (reduced) {
+            if (nanos >= until) {
+                reduced = false
+                fullSince = nanos
+                slowRun = 0
+            }
+            return
+        }
+        slowRun = if (gap > slowNanos) slowRun + 1 else 0
+        if (slowRun >= SLOW_FRAMES) {
+            reduced = true
+            until = nanos + holdNanos
+            holdNanos = (holdNanos * 2).coerceAtMost(HOLD_MAX)
+            slowRun = 0
+        } else if (nanos - fullSince > HOLD_MAX) {
+            holdNanos = HOLD_MIN
+        }
+    }
+
+    private companion object {
+        const val SLOW_FRAMES = 3
+        const val HOLD_MIN = 4_000_000_000L
+        const val HOLD_MAX = 30_000_000_000L
+    }
 }
 
 private fun wrap(value: Float) = ((value % 1f) + 1f) % 1f
@@ -591,25 +653,39 @@ private fun DrawScope.softCircle(color: Color, alpha: Float, center: Offset, rad
     }
 }
 
-/** A line blurred into a soft halo, for the glow under a crisp stroke. */
+/**
+ * A soft halo under a crisp line: the line again, four times, each wider and
+ * fainter, so the glow thins away from it.
+ *
+ * This was one stroke through a blur mask filter. That blur is worked out
+ * over the whole bounds of the path, and a path across a 2560 px window made
+ * it most of what a frame cost (more than the rest of Waves together on a
+ * machine without a fast GPU), three times a frame. Layered strokes are plain
+ * path strokes: about the same look, a fraction of the work, the same at any size.
+ */
 private fun DrawScope.glowPath(path: Path, color: Color, width: Float, blur: Float) {
     drawIntoCanvas { canvas ->
-        glowPaint.color = color
         glowPaint.style = PaintingStyle.Stroke
-        glowPaint.strokeWidth = width
         glowPaint.strokeCap = StrokeCap.Round
-        glowPaint.asFrameworkPaint().maskFilter = MaskFilter.makeBlur(FilterBlurMode.NORMAL, blur)
-        canvas.drawPath(path, glowPaint)
+        glowPaint.asFrameworkPaint().maskFilter = null
+        for (layer in HALO) {
+            glowPaint.color = color.copy(alpha = color.alpha * layer.second)
+            glowPaint.strokeWidth = width + blur * layer.first
+            canvas.drawPath(path, glowPaint)
+        }
     }
 }
 
+/** Width (in blurs) and share of the colour's strength of each layer of a halo, widest first. */
+private val HALO = listOf(3.8f to 0.09f, 2.6f to 0.11f, 1.6f to 0.14f, 0.8f to 0.16f)
+
 /** A smooth curve through the points: quadratic segments meeting at each midpoint. */
-private fun smoothThrough(path: Path, xs: FloatArray, ys: FloatArray, moveFirst: Boolean) {
+private fun smoothThrough(path: Path, xs: FloatArray, ys: FloatArray, moveFirst: Boolean, count: Int = xs.size) {
     if (moveFirst) path.moveTo(xs[0], ys[0])
-    for (i in 1 until xs.size) {
+    for (i in 1 until count) {
         path.quadraticTo(xs[i - 1], ys[i - 1], (xs[i - 1] + xs[i]) / 2f, (ys[i - 1] + ys[i]) / 2f)
     }
-    path.lineTo(xs[xs.size - 1], ys[ys.size - 1])
+    path.lineTo(xs[count - 1], ys[count - 1])
 }
 
 // ---- Aurora --------------------------------------------------------------------
@@ -778,7 +854,7 @@ private fun DrawScope.snow(t: Float, color: Color, motes: List<Mote>) {
  * lightly averaged, so it scrolls smoothly instead of shimmering. The now line
  * glows with what is playing this instant.
  */
-internal fun DrawScope.songGraph(color: Color, song: SongShape, pulse: Pulse?, place: Placement) {
+internal fun DrawScope.songGraph(color: Color, song: SongShape, pulse: Pulse?, place: Placement, reduced: Boolean = false) {
     val w = size.width
     val h = size.height
     val windowWidth = max(place.width, w)
@@ -788,7 +864,8 @@ internal fun DrawScope.songGraph(color: Color, song: SongShape, pulse: Pulse?, p
     val reach = h * 0.24f
     val position = song.positionMs()
     val hot = lerp(color, Color.White, 0.45f)
-    val step = 5f * density
+    // Reduced (see [FrameGuard]): half as many points and no halos, for a window too big to draw them in time.
+    val step = (if (reduced) 10f else 5f) * density
     val slices = song.slices
     val filled = min(song.filled, slices.size)
     val scale = 1f / max(song.loudest, 0.02f)
@@ -809,9 +886,11 @@ internal fun DrawScope.songGraph(color: Color, song: SongShape, pulse: Pulse?, p
     }
 
     val count = (w / step).toInt() + 3
-    val xs = FloatArray(count)
-    val tops = FloatArray(count)
-    val bottoms = FloatArray(count)
+    // The same arrays and paths every frame (all drawn on the UI thread): a screen-sized
+    // window made a few thousand floats and three big paths sixty times a second.
+    val xs = graphXs.sized(count)
+    val tops = graphTops.sized(count)
+    val bottoms = graphBottoms.sized(count)
     for (c in 0 until count) {
         val x = (c - 1) * step
         val amplitude = loudness(position + (x - nowX) * msPerPx) * reach + density
@@ -830,40 +909,68 @@ internal fun DrawScope.songGraph(color: Color, song: SongShape, pulse: Pulse?, p
         endX = w
     )
 
-    val top = Path().also { smoothThrough(it, xs, tops, moveFirst = true) }
-    val bottom = Path().also { smoothThrough(it, xs, bottoms, moveFirst = true) }
-    val body = Path().apply {
-        smoothThrough(this, xs, tops, moveFirst = true)
+    val top = topPath.apply { rewind(); smoothThrough(this, xs, tops, moveFirst = true, count = count) }
+    val bottom = bottomPath.apply { rewind(); smoothThrough(this, xs, bottoms, moveFirst = true, count = count) }
+    val body = bodyPath.apply {
+        rewind()
+        smoothThrough(this, xs, tops, moveFirst = true, count = count)
         lineTo(xs[count - 1], bottoms[count - 1])
-        smoothThrough(this, xs.reversedArray(), bottoms.reversedArray(), moveFirst = false)
+        // Back along the bottom edge, right to left.
+        for (i in count - 2 downTo 0) {
+            quadraticTo(xs[i + 1], bottoms[i + 1], (xs[i + 1] + xs[i]) / 2f, (bottoms[i + 1] + bottoms[i]) / 2f)
+        }
+        lineTo(xs[0], bottoms[0])
         close()
     }
+    val edge = split(hot, 0.30f, 0.80f, 0.35f)
 
     drawLine(color.copy(alpha = 0.10f), Offset(0f, centre), Offset(w, centre), density)
     drawPath(body, split(color, 0.08f, 0.24f, 0.12f))
-    glowPath(top, hot.copy(alpha = 0.22f), 2f * density, 6f * density)
-    glowPath(bottom, hot.copy(alpha = 0.22f), 2f * density, 6f * density)
-    drawPath(top, split(hot, 0.30f, 0.80f, 0.35f), style = Stroke(width = 1.4f * density))
-    drawPath(bottom, split(hot, 0.30f, 0.80f, 0.35f), style = Stroke(width = 1.4f * density))
+    if (!reduced) {
+        glowPath(top, hot.copy(alpha = 0.22f), 2f * density, 6f * density)
+        glowPath(bottom, hot.copy(alpha = 0.22f), 2f * density, 6f * density)
+    }
+    drawPath(top, edge, style = Stroke(width = 1.4f * density))
+    drawPath(bottom, edge, style = Stroke(width = 1.4f * density))
 
     if (nowX > -24f && nowX < w + 24f) {
         val level = loudness(position)
         val live = pulse?.energy ?: 0f
         val lineTop = centre - reach * 1.2f
         val lineBottom = centre + reach * 1.2f
-        val line = Path().apply {
-            moveTo(nowX, lineTop)
-            lineTo(nowX, lineBottom)
+        if (!reduced) {
+            val line = nowPath.apply {
+                rewind()
+                moveTo(nowX, lineTop)
+                lineTo(nowX, lineBottom)
+            }
+            glowPath(line, hot.copy(alpha = 0.30f + live * 0.40f), 3f * density, (6f + live * 8f) * density)
         }
-        glowPath(line, hot.copy(alpha = 0.30f + live * 0.40f), 3f * density, (6f + live * 8f) * density)
         drawLine(hot.copy(alpha = 0.85f), Offset(nowX, lineTop), Offset(nowX, lineBottom), 1.5f * density)
         val reachNow = level * reach + density
-        for (y in listOf(centre - reachNow, centre + reachNow)) {
-            softCircle(hot, 0.45f + live * 0.35f, Offset(nowX, y), (10f + level * 14f) * density)
+        for (side in 0..1) {
+            val y = if (side == 0) centre - reachNow else centre + reachNow
+            if (!reduced) softCircle(hot, 0.45f + live * 0.35f, Offset(nowX, y), (10f + level * 14f) * density)
             drawCircle(hot, (2.4f + level * 2f) * density, Offset(nowX, y))
         }
     }
 }
+
+// The graph's own scratch, reused on the UI thread like the paints above.
+private class Floats {
+    private var array = FloatArray(0)
+    fun sized(n: Int): FloatArray {
+        if (array.size < n) array = FloatArray(n)
+        return array
+    }
+}
+private val graphXs = Floats()
+private val graphTops = Floats()
+private val graphBottoms = Floats()
+private val topPath = Path()
+private val bottomPath = Path()
+private val bodyPath = Path()
+private val nowPath = Path()
 
 /**
  * Waves before anything is playing: a ribbon of near-parallel lines rolling

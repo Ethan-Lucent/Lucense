@@ -16,6 +16,7 @@ import com.exo.musicplayer.desktop.download.DownloadArchive
 import com.exo.musicplayer.desktop.download.DownloadProgress
 import com.exo.musicplayer.desktop.download.ToolStatus
 import com.exo.musicplayer.desktop.download.YtDlp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -45,10 +46,14 @@ internal class Downloader(
     private val linkFinder: YouTubeLinkFinder,
     private val signIn: YouTubeSignInSettings,
     private val addToLibrary: (List<File>) -> Unit,
-    private val rescan: () -> Unit
+    private val rescan: () -> Unit,
+    /** yt-dlp and spotdl; a parameter so a test can stand in for them. */
+    private val engine: DownloadEngine = YtDlpEngine(youtubeBackend),
+    /** Looks for a cover for songs that landed without one. */
+    private val covers: CoverFinishing = CoverFinishing { _, _ -> emptyList() }
 ) {
     var tools by mutableStateOf(ToolStatus())
-        private set
+        internal set
     var toolNote by mutableStateOf<String?>(null)
     var toolProgress by mutableStateOf<Float?>(null)
         private set
@@ -192,7 +197,9 @@ internal class Downloader(
      */
     private val songSlots = Semaphore(2)
 
-    fun queueDownload(url: String, song: YouTubeLinkFinder.Wanted?): Long? {
+    fun queueDownload(url: String, song: YouTubeLinkFinder.Wanted?): Long? = queueDownload(url, song, hint = null)
+
+    internal fun queueDownload(url: String, song: YouTubeLinkFinder.Wanted?, hint: CoverHint?): Long? {
         if (url.isBlank()) return null
         if (!tools.ready) {
             toolNote = "Install yt-dlp first — one click, about 12 MB."
@@ -203,7 +210,8 @@ internal class Downloader(
             id = System.nanoTime(),
             target = url,
             display = url,
-            song = song
+            song = song,
+            hint = hint
         )
         synchronized(queueLock) { downloads = downloads + entry }
 
@@ -232,7 +240,7 @@ internal class Downloader(
     ): Fetched {
         var refused = false
         var said: String? = null
-        val result = YtDlp.download(
+        val result = engine.download(
             target = target,
             destination = File(settings.downloadDir),
             format = downloadFormat?.takeIf { tools.ffmpeg },
@@ -277,7 +285,7 @@ internal class Downloader(
      */
     private suspend fun downloadSongsOf(entry: DownloadEntry, link: String) {
         update(entry.id) { it.status = "Reading the playlist…" }
-        val (playlist, problem) = youtubeBackend.playlist(link)
+        val (playlist, problem) = engine.playlist(link)
         val songs = playlist?.songs.orEmpty()
         if (songs.isEmpty()) {
             val said = problem?.let(YouTubeTrouble::reason)?.takeIf { it.isNotBlank() }
@@ -373,8 +381,9 @@ internal class Downloader(
                             finished++
                             report(null)
                         }
-                        // Into the library as each one lands, not when the last one has.
-                        if (files.isNotEmpty()) addToLibrary(files)
+                        // Into the library as each one lands, not when the last one has;
+                        // its cover is looked for in the background, one song at a time.
+                        landed(entry.id, files, null)
                     }
                 }
             }
@@ -465,6 +474,9 @@ internal class Downloader(
         val result = fetch(target, wholePlaylist = downloadPlaylist && song == null) { progress ->
             onDownloadProgress(entry.id, progress)
         }.result
+        // A song asked for by name is looked for by that name; the file's tags
+        // are only what the video's title made of it.
+        val hint = entry.hint ?: song?.let { CoverHint(query = it.query) }
 
         result.fold(
             onSuccess = { files ->
@@ -479,7 +491,7 @@ internal class Downloader(
                     }
                 }
                 // Straight into the library, wherever the download folder is.
-                addToLibrary(files)
+                landed(entry.id, files, hint)
             },
             onFailure = { error ->
                 update(entry.id) {
@@ -545,9 +557,10 @@ internal class Downloader(
             toolNote = "Install yt-dlp first — one click, about 12 MB."
             return
         }
+        val hint = hintOf(match)
         val direct = match.downloadUrl?.takeIf { it.startsWith("http", ignoreCase = true) }
         if (direct != null) {
-            startDownload(direct)
+            if (queueDownload(direct, song = null, hint = hint) != null) downloadUrl = ""
             return
         }
 
@@ -556,7 +569,8 @@ internal class Downloader(
             target = match.display,
             display = match.display,
             note = "${match.provider} has no downloadable file, so the same track is " +
-                "found on YouTube first and that link is downloaded."
+                "found on YouTube first and that link is downloaded.",
+            hint = hint
         )
         synchronized(queueLock) { downloads = downloads + entry }
         scope.launch {
@@ -571,13 +585,14 @@ internal class Downloader(
                     durationMs = match.durationMs
                 )
             ) ?: return@launch
-            val result = YtDlp.download(
+            val result = engine.download(
                 target = link,
                 destination = File(settings.downloadDir),
                 format = downloadFormat?.takeIf { tools.ffmpeg },
                 embedThumbnail = downloadEmbedArt,
                 wholePlaylist = false,
                 quality = downloadQuality,
+                cutNonMusic = downloadCutNonMusic,
                 onProgress = { progress -> onDownloadProgress(entry.id, progress) }
             )
             result.fold(
@@ -588,7 +603,7 @@ internal class Downloader(
                         it.files = files
                         it.status = "Saved ${files.size} file${if (files.size == 1) "" else "s"}"
                     }
-                    addToLibrary(files)
+                    landed(entry.id, files, hint)
                 },
                 onFailure = { error ->
                     update(entry.id) {
@@ -622,7 +637,7 @@ internal class Downloader(
                 "and fetches the same recording from YouTube. Check it is the version " +
                 "you wanted."
         }
-        val result = YtDlp.downloadSpotify(
+        val result = engine.downloadSpotify(
             url = url,
             destination = File(settings.downloadDir),
             format = downloadFormat,
@@ -642,6 +657,9 @@ internal class Downloader(
                     }
                 }
                 rescan()
+                // spotdl embeds Spotify's own picture when it can; a song it
+                // left bare is looked for like any other.
+                findCovers(id, files, null)
             },
             onFailure = { error ->
                 update(id) {
@@ -652,6 +670,44 @@ internal class Downloader(
             }
         )
     }
+
+    /**
+     * What a finished download needs doing to it, whichever way it came:
+     * into the library, then - in the background, so the queue isn't held up -
+     * a cover if it landed without one. Every path ends here.
+     */
+    private fun landed(id: Long, files: List<File>, hint: CoverHint?) {
+        if (files.isEmpty()) return
+        addToLibrary(files)
+        findCovers(id, files, hint)
+    }
+
+    private val coverTallies = HashMap<Long, CoverTally>()
+
+    private fun findCovers(id: Long, files: List<File>, hint: CoverHint?) {
+        if (files.isEmpty()) return
+        scope.launch {
+            val outcomes = try {
+                covers.finish(files, hint)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val note = synchronized(coverTallies) {
+                coverTallies.getOrPut(id) { CoverTally() }.also { it.add(outcomes) }.note()
+            }
+            update(id) { it.cover = note }
+        }
+    }
+
+    /** What a catalogue match tells the cover lookup: its own names, and its picture unless that is just a video frame. */
+    private fun hintOf(match: MusicMatch) = CoverHint(
+        query = listOfNotNull(match.artist?.takeIf { it.isNotBlank() }, match.title).joinToString(" "),
+        // YouTube's picture is the video's thumbnail, which yt-dlp has already embedded, square.
+        artworkUrl = match.artworkUrl?.takeIf { !match.provider.equals("YouTube", ignoreCase = true) },
+        provider = match.provider.takeIf { it.isNotBlank() }
+    )
 
     private fun onDownloadProgress(id: Long, progress: DownloadProgress) {
         if (progress.line.isNotBlank()) {

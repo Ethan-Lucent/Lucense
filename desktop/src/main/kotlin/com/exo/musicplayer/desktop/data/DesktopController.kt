@@ -25,6 +25,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
@@ -41,6 +42,7 @@ import com.exo.musicplayer.data.lyrics.LyricsProviderChain
 import com.exo.musicplayer.data.lyrics.LyricsTerm
 import com.exo.musicplayer.data.lyrics.NeteaseLyricsProvider
 import com.exo.musicplayer.data.lyrics.tidyLyrics
+import com.exo.musicplayer.data.net.Http
 import com.exo.musicplayer.data.recognition.AudiusProvider
 import com.exo.musicplayer.data.recognition.DeezerProvider
 import com.exo.musicplayer.data.recognition.GeniusLyricSearch
@@ -53,6 +55,7 @@ import com.exo.musicplayer.data.recognition.MatchRanker
 import com.exo.musicplayer.data.recognition.MusicMatch
 import com.exo.musicplayer.data.recognition.NeteaseLyricSearch
 import com.exo.musicplayer.data.recognition.RecognitionResult
+import com.exo.musicplayer.data.net.HttpTally
 import com.exo.musicplayer.data.recognition.ShazamClient
 import com.exo.musicplayer.data.recognition.YouTubeSearchProvider
 import com.exo.musicplayer.data.playlist.ImportResult
@@ -107,6 +110,10 @@ import com.exo.musicplayer.desktop.ui.AccentChoice
 import com.exo.musicplayer.desktop.ui.BackdropStyle
 import com.exo.musicplayer.desktop.ui.DesktopFxState
 import com.exo.musicplayer.desktop.ui.Palette
+import com.exo.musicplayer.desktop.ui.Modals
+import com.exo.musicplayer.desktop.ui.MouseButtonsMode
+import com.exo.musicplayer.desktop.ui.NavHistory
+import com.exo.musicplayer.desktop.ui.NavPlace
 import com.exo.musicplayer.desktop.ui.ReactiveMode
 import com.exo.musicplayer.desktop.ui.SidePanelKind
 import com.exo.musicplayer.desktop.ui.ThemeColors
@@ -172,6 +179,10 @@ class DesktopController(parent: CoroutineScope) {
                 youtubeBusy = false
                 identifyTabs.values.forEach { it.busy = false }
                 merging = false
+                // A bulk run left "running" refuses every later run, so it is ended here too.
+                if (bulk.running) {
+                    bulk = bulk.copy(running = false, current = "", stopped = true, finishedNote = "Stopped: something went wrong.")
+                }
                 System.err.println("Lucense: a background job failed: ${error.stackTraceToString()}")
             }
     )
@@ -1126,6 +1137,14 @@ class DesktopController(parent: CoroutineScope) {
             settings.glassSeeThrough = Glass.seeThrough
         }
 
+    /** Whether the glass background is colourful rather than one calm colour (Settings > Appearance). */
+    var glassRainbow: Boolean
+        get() = Glass.colourful
+        set(value) {
+            Glass.colourful = value
+            settings.glassRainbow = value
+        }
+
     /**
      * Whether resting the mouse on a menu item shows its note. [Notes.on] is
      * already Compose state, so it is the mirror; this keeps it and the
@@ -1136,6 +1155,16 @@ class DesktopController(parent: CoroutineScope) {
         set(value) {
             Notes.on = value
             settings.hoverNotes = value
+        }
+
+    private val mouseButtonsState = mutableStateOf(MouseButtonsMode.fromName(settings.mouseButtons))
+
+    /** What the mouse's side buttons do in the main window: page history, or previous and next song. */
+    var mouseButtons: MouseButtonsMode
+        get() = mouseButtonsState.value
+        set(value) {
+            mouseButtonsState.value = value
+            settings.mouseButtons = value.name
         }
 
     /** Whether the extra controls are shown; [Advanced.on] is the state, this keeps it and the setting together. */
@@ -1177,6 +1206,7 @@ class DesktopController(parent: CoroutineScope) {
     init {
         Glass.on = settings.glass
         Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)
+        Glass.colourful = settings.glassRainbow
         Notes.on = settings.hoverNotes
         Advanced.on = settings.advancedMode
         UiScale.factor = settings.uiScale.coerceIn(UI_SCALES.first().second, UI_SCALES.last().second)
@@ -2218,7 +2248,9 @@ class DesktopController(parent: CoroutineScope) {
                 LyricsFetch.NotFound -> lyricsNote =
                     "None of the four services had lyrics for this. You can paste them in yourself."
             }
-            io { store.mark(track.file.absolutePath, "lyricsCheckedAt") }
+            // Only an answer counts as checked; a failed lookup would otherwise hide
+            // the song from every later Lyrics run.
+            if (result !is LyricsFetch.Error) io { store.mark(track.file.absolutePath, "lyricsCheckedAt") }
             lyricsLoading = false
         }
     }
@@ -2973,7 +3005,15 @@ class DesktopController(parent: CoroutineScope) {
                     )
                 }
             }
-            coverOf(match)?.let { Covers.fetchAndStore(track, it, writeTags) }
+            val matchCover = coverOf(match)?.let { Covers.fetchAndStore(track, it, writeTags) } == true
+            // The match came with no picture (YouTube results never do), or its
+            // link was dead: the same lookup a download gets, so identifying a
+            // song from YouTube doesn't leave it coverless. Asked for by hand,
+            // so it isn't held back by the setting or an earlier try.
+            if (!matchCover) {
+                val hint = CoverHint(query = listOfNotNull(match.artist, match.title).joinToString(" "))
+                autoCover.ensure(listOf(track.file), hint, force = true)
+            }
             io { store.mark(track.file.absolutePath, "identifiedAt") }
             // The tags are written either way; only the word about it is
             // dropped if the tab was left (and cleared) in the meantime.
@@ -3052,7 +3092,6 @@ class DesktopController(parent: CoroutineScope) {
         private set
     private var bulkJob: Job? = null
 
-    private fun Boolean.asOutcome() = if (this) BulkOutcome.UPDATED else BulkOutcome.NOTHING_FOUND
 
     /** What the last bulk run was asked to do, so a stopped one can be run again in a click. */
     private class LastBulk(val kind: BulkKind, val names: Boolean, val tags: Boolean)
@@ -3093,7 +3132,40 @@ class DesktopController(parent: CoroutineScope) {
         if (bulk.running) return
         val column = kind.markColumn
         lastBulk = LastBulk(kind, names, tags)
+        // These write names into the files, which the setting says not to do.
+        if (!writeTags && kind in WRITES_TAGS) {
+            bulk = BulkJob(
+                label = kind.label,
+                finishedNote = "${kind.label} writes into your files, and \"Write tags and cover art into " +
+                    "files\" is off in Settings, so nothing was done."
+            )
+            return
+        }
+        if (kind == BulkKind.TAGS && !names && !tags) {
+            bulk = BulkJob(label = kind.label, finishedNote = "Pick names, tags or both.")
+            return
+        }
         bulkJob = scope.launch {
+            try {
+                runBulkNow(kind, redo, names, tags, column)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                // Left as it was, a run that crashed stayed "running" for good: every
+                // later run returned at once and the dialog's buttons stayed greyed out.
+                System.err.println("Lucense: ${kind.label} failed: ${failure.stackTraceToString()}")
+                bulk = bulk.copy(
+                    running = false, current = "", stopped = true,
+                    finishedNote = "${kind.label} stopped: ${failure.message ?: failure.javaClass.simpleName}. " +
+                        "What it finished is kept; run it again for the rest."
+                )
+                bulkJob = null
+            }
+        }
+    }
+
+    private suspend fun runBulkNow(kind: BulkKind, redo: Boolean, names: Boolean, tags: Boolean, column: String?) {
+        coroutineScope {
             val already = if (redo || column == null) emptySet() else io { store.markedPaths(column) }
             val queue = if (kind == BulkKind.REPAIR) {
                 io { tracks.filter { needsRepair(it) } }
@@ -3117,22 +3189,24 @@ class DesktopController(parent: CoroutineScope) {
                 skipped = skipped
             )
 
-            // Identifying decodes audio, so it stays one at a time.
-            val (updated, alreadyHad, failed) = workThrough(
+            // Identifying decodes audio, so it stays one at a time. Only a song that got
+            // an answer is marked (workThroughQueue): a failed lookup is tried again next run.
+            val tally = workThrough(
                 queue,
                 workers = if (kind == BulkKind.IDENTIFY) 1 else SONGS_AT_ONCE,
+                paceMs = if (kind in ONLINE) BULK_PACE_MS else 0L,
                 afterEach = { track ->
                     if (column != null) io { store.mark(track.file.absolutePath, column) }
                 }
             ) { track ->
                 when (kind) {
                     BulkKind.COVERS -> bulkCover(track)
-                    BulkKind.TAGS -> bulkTags(track, names, tags).asOutcome()
-                    BulkKind.LYRICS -> bulkLyrics(track).asOutcome()
-                    BulkKind.IDENTIFY -> bulkIdentify(track).asOutcome()
+                    BulkKind.TAGS -> bulkTags(track, names, tags)
+                    BulkKind.LYRICS -> bulkLyrics(track)
+                    BulkKind.IDENTIFY -> bulkIdentify(track)
                     BulkKind.REPAIR -> bulkRepair(track)
                     BulkKind.LEVELS -> bulkLevel(track)
-                    BulkKind.FOLDERS -> bulkFolders(track).asOutcome()
+                    BulkKind.FOLDERS -> bulkFolders(track)
                 }
             }
 
@@ -3140,15 +3214,11 @@ class DesktopController(parent: CoroutineScope) {
             ensureActive()
             bulk = bulk.copy(
                 running = false,
-                done = queue.size,
+                done = tally.answered + tally.failed,
                 current = "",
-                finishedNote = buildString {
-                    append("$updated updated")
-                    if (alreadyHad > 0) append(", $alreadyHad already had art")
-                    if (failed > 0) append(", $failed with nothing found")
-                    if (skipped > 0) append(", $skipped skipped as already done")
-                    append(".")
-                }
+                // Gave up early: offer "Run again" for once the connection is back.
+                stopped = tally.gaveUp != null,
+                finishedNote = bulkNote(kind.words, tally, skipped)
             )
             bulkJob = null
             // Fetched covers are already in place and on screen, so only the tools
@@ -3161,6 +3231,7 @@ class DesktopController(parent: CoroutineScope) {
     private suspend fun workThrough(
         queue: List<DesktopTrack>,
         workers: Int,
+        paceMs: Long = 0L,
         afterEach: suspend (DesktopTrack) -> Unit = {},
         step: suspend (DesktopTrack) -> BulkOutcome
     ): BulkTally = workThroughQueue(
@@ -3168,10 +3239,11 @@ class DesktopController(parent: CoroutineScope) {
         onProgress = { p ->
             bulk = bulk.copy(
                 done = p.done, updated = p.updated, alreadyHad = p.alreadyHad,
-                failed = p.failed, current = p.current
+                nothing = p.nothing, failed = p.failed, current = p.current
             )
         },
         afterEach = afterEach,
+        paceMs = paceMs,
         step = step
     )
 
@@ -3206,14 +3278,17 @@ class DesktopController(parent: CoroutineScope) {
             var genred = 0
             var lyricked = 0
             var heard = 0
-            val (_, _, failed) = workThrough(targets, SONGS_AT_ONCE) { track ->
+            var lyricsUnreached = 0
+            val tally = workThrough(targets, SONGS_AT_ONCE) { track ->
                 val fixed = fixOne(track, tags, genres, lyrics)
                 if (fixed.tags) tagged++
                 if (fixed.genre) genred++
                 if (fixed.lyrics) lyricked++
                 if (fixed.heard) heard++
+                if (fixed.lyricsFailed) lyricsUnreached++
                 if (fixed.tags || fixed.genre || fixed.lyrics) BulkOutcome.UPDATED else BulkOutcome.NOTHING_FOUND
             }
+            val failed = tally.nothing + tally.failed
             val found = buildList {
                 if (tags) add("tags for $tagged")
                 if (genres) add("genres for $genred")
@@ -3228,6 +3303,11 @@ class DesktopController(parent: CoroutineScope) {
                     append("Found ${found.joinToString(", ")} of ${targets.size}.")
                     if (heard > 0) append(" $heard identified by listening.")
                     if (failed > 0) append(" Nothing at all for $failed.")
+                    // A lookup that couldn't reach anyone is not "no lyrics": say which it was.
+                    if (lyricsUnreached > 0) append(" The lyrics services couldn't be reached for $lyricsUnreached.")
+                    if (!writeTags && (tags || genres)) {
+                        append(" Tags weren't written: \"Write tags and cover art into files\" is off in Settings.")
+                    }
                 }
             )
             bulkJob = null
@@ -3235,7 +3315,14 @@ class DesktopController(parent: CoroutineScope) {
         }
     }
 
-    private class Fixed(val tags: Boolean, val genre: Boolean, val lyrics: Boolean, val heard: Boolean)
+    private class Fixed(
+        val tags: Boolean,
+        val genre: Boolean,
+        val lyrics: Boolean,
+        val heard: Boolean,
+        /** The lyrics lookup got no answer (offline, a service down), as opposed to finding none. */
+        val lyricsFailed: Boolean = false
+    )
 
     /**
      * One song: who it is, then whichever parts were asked for.
@@ -3266,7 +3353,8 @@ class DesktopController(parent: CoroutineScope) {
 
         val haveTags = tags && (title != null || artist != null || album != null || year != null)
         val haveGenre = genres && genre != null
-        val written = (haveTags || haveGenre) && io {
+        // Files are only written where the setting allows it.
+        val written = (haveTags || haveGenre) && writeTags && io {
             // The writer leaves a null field alone, so an unticked part is
             // simply a part it isn't offered.
             TagWriter.write(
@@ -3280,14 +3368,21 @@ class DesktopController(parent: CoroutineScope) {
         }
         // Looked for under the song's real name whenever one was just found,
         // whether or not that name was wanted in the file.
-        val gotLyrics = lyrics && bulkLyrics(
-            track.copy(title = title ?: track.title, artist = artist ?: track.artist)
-        )
+        val lyricsResult = if (!lyrics) {
+            null
+        } else {
+            try {
+                bulkLyrics(track.copy(title = title ?: track.title, artist = artist ?: track.artist), keepStored = false)
+            } catch (failure: BulkFailure) {
+                BulkOutcome.FAILED
+            }
+        }
         return Fixed(
             tags = haveTags && written,
             genre = haveGenre && written,
-            lyrics = gotLyrics,
-            heard = match != null
+            lyrics = lyricsResult == BulkOutcome.UPDATED,
+            heard = match != null,
+            lyricsFailed = lyricsResult == BulkOutcome.FAILED
         )
     }
 
@@ -3389,7 +3484,8 @@ class DesktopController(parent: CoroutineScope) {
 
     private suspend fun bulkLevel(track: DesktopTrack): BulkOutcome {
         val path = track.file.absolutePath
-        val reading = io { Loudness.measure(track.file) } ?: return BulkOutcome.NOTHING_FOUND
+        val reading = io { Loudness.measure(track.file) }
+            ?: throw BulkFailure("couldn't be measured (unreadable, too short or silent)")
         io { store.saveLevel(path, reading.dbfs, reading.peak) }
         levels = levels + (path to (reading.dbfs to reading.peak))
         if (engine.status.value.track?.file?.absolutePath == path) {
@@ -3401,18 +3497,37 @@ class DesktopController(parent: CoroutineScope) {
     private suspend fun bulkRepair(track: DesktopTrack): BulkOutcome {
         val file = track.file
         var mended = false
+        var problem: BulkFailure? = null
         if (track.durationMs <= 0L || io { lacksHeader(file) }) {
-            if (io { rebuildContainer(file) }) mended = true
+            when {
+                // Without ffmpeg every file fails the same way; saying so beats "nothing to mend".
+                !ToolPaths.ffmpeg.isFile -> throw BulkFailure(
+                    "couldn't be rebuilt (ffmpeg is missing)",
+                    GiveUp("Repair needs ffmpeg, which is missing.", "once it is back")
+                )
+                io { rebuildContainer(file) } -> mended = true
+                else -> problem = BulkFailure("couldn't be rebuilt (ffmpeg refused the file)")
+            }
         }
         val named = TelegramName.of(file.nameWithoutExtension)
-        if (named != null && track.artist.isNullOrBlank()) {
-            val wrote = io {
-                TagWriter.change(TagChange(file, artist = named.artist, title = named.title)).isSuccess
-            }
-            if (wrote) mended = true
+        // The name goes into the tags only where the setting allows writing them.
+        if (named != null && track.artist.isNullOrBlank() && writeTags) {
+            val wrote = io { TagWriter.change(TagChange(file, artist = named.artist, title = named.title)) }
+            if (wrote.isSuccess) mended = true else problem = writeFailure(wrote)
         }
+        problem?.let { throw it }
         return if (mended) BulkOutcome.UPDATED else BulkOutcome.NOTHING_FOUND
     }
+
+    /** A tag that couldn't be written (a locked or read-only file): not done, so tried again next time. */
+    private fun writeFailure(result: Result<*>): BulkFailure =
+        BulkFailure("couldn't be written (${result.exceptionOrNull()?.message ?: "the file refused"})")
+
+    /** No song database answered at all: the connection, not the song. */
+    private fun unreachable(what: String) = BulkFailure(
+        "couldn't be reached (check your connection)",
+        GiveUp("$what can't be reached right now.")
+    )
 
     /** The cover services, in the order they are normally asked. */
     val coverProviders: List<String> get() = libraryLookup.labels
@@ -3460,36 +3575,52 @@ class DesktopController(parent: CoroutineScope) {
 
     private suspend fun bulkCover(track: DesktopTrack): BulkOutcome {
         if (io { Covers.hasLocalArt(track) }) return BulkOutcome.ALREADY_HAD
-        val stored = coverLookup().findArtwork(track.searchQuery) { url ->
+        val lookup = coverLookup()
+        if (lookup.labels.isEmpty()) {
+            throw BulkFailure(
+                "weren't looked up (every cover service is off)",
+                GiveUp("Every cover service is turned off in Settings.", "once one is on")
+            )
+        }
+        val reach = HttpTally()
+        val stored = lookup.findArtwork(track.searchQuery, reach = reach) { url ->
             Covers.fetchAndStore(track, url, writeTags).takeIf { it }?.also {
                 // Kept because Discord needs an address, not a local file.
                 io { store.saveCoverUrl(track.file.absolutePath, url) }
             }
         }
-        return if (stored != null) BulkOutcome.UPDATED else BulkOutcome.NOTHING_FOUND
+        return when {
+            stored != null -> BulkOutcome.UPDATED
+            // Not one service answered (offline, or the proxy hanging): that says nothing about the song.
+            reach.reached == 0 -> throw unreachable("Cover services")
+            else -> BulkOutcome.NOTHING_FOUND
+        }
     }
 
-    private suspend fun bulkTags(track: DesktopTrack, names: Boolean, tags: Boolean): Boolean {
-        if (!names && !tags) return false
-        val details = libraryLookup.findDetails(track.artist, track.title, giveUpMs = TAGS_GIVE_UP_MS)
-            ?: return false
+    private suspend fun bulkTags(track: DesktopTrack, names: Boolean, tags: Boolean): BulkOutcome {
+        if (!names && !tags) return BulkOutcome.NOTHING_FOUND
+        val reach = HttpTally()
+        val details = libraryLookup.findDetails(track.artist, track.title, giveUpMs = TAGS_GIVE_UP_MS, reach = reach)
+            ?: return if (reach.reached == 0) throw unreachable("Song databases") else BulkOutcome.NOTHING_FOUND
         // Nothing the chosen half can fill in is not a success, it is a miss:
         // counting it as updated would claim work that never happened.
         val useful = (names && (details.title != null || details.artist != null)) ||
             (tags && (details.album != null || details.year != null || details.genre != null))
-        if (!useful) return false
+        if (!useful) return BulkOutcome.NOTHING_FOUND
         // The writer leaves a null field alone, so unticking a half is simply a
-        // matter of not offering it those fields.
-        return io {
-            TagWriter.write(
-                file = track.file,
-                title = details.title.takeIf { names },
-                artist = details.artist.takeIf { names },
-                album = details.album.takeIf { tags },
-                year = details.year.takeIf { tags },
-                genre = details.genre.takeIf { tags }
-            ).isSuccess
+        // matter of not offering it those fields, and a field that already says
+        // the same is not offered either: a song that is already right isn't rewritten.
+        val title = details.title.takeIf { names }.unlessSame(track.title)
+        val artist = details.artist.takeIf { names }.unlessSame(track.artist)
+        val album = details.album.takeIf { tags }.unlessSame(track.album)
+        val year = details.year.takeIf { tags && it != track.year }
+        val genre = details.genre.takeIf { tags }.unlessSame(track.genre)
+        if (title == null && artist == null && album == null && year == null && genre == null) {
+            return BulkOutcome.ALREADY_HAD
         }
+        val wrote = io { TagWriter.write(track.file, title, artist, album, year, genre) }
+        if (wrote.isFailure) throw writeFailure(wrote)
+        return BulkOutcome.UPDATED
     }
 
     /**
@@ -3500,7 +3631,7 @@ class DesktopController(parent: CoroutineScope) {
      * is only replaced when it is nothing but the file name, which is what an
      * untagged file shows.
      */
-    private suspend fun bulkFolders(track: DesktopTrack): Boolean {
+    private suspend fun bulkFolders(track: DesktopTrack): BulkOutcome {
         val path = track.file.absoluteFile.normalize().path.lowercase()
         val root = roots().firstOrNull { path.startsWith(it.absoluteFile.normalize().path.lowercase()) }
         val derived = FolderNames.of(track.file, root)
@@ -3508,40 +3639,72 @@ class DesktopController(parent: CoroutineScope) {
         val title = derived.title?.takeIf { untitled && it != track.title }
         val artist = derived.artist?.takeIf { track.artist.isNullOrBlank() }
         val album = derived.album?.takeIf { track.album.isNullOrBlank() }
-        if (title == null && artist == null && album == null) return false
-        return io {
-            TagWriter.change(
-                TagChange(file = track.file, title = title, artist = artist, album = album)
-            ).isSuccess
+        if (title == null && artist == null && album == null) return BulkOutcome.NOTHING_FOUND
+        val wrote = io {
+            TagWriter.change(TagChange(file = track.file, title = title, artist = artist, album = album))
         }
+        if (wrote.isFailure) throw writeFailure(wrote)
+        return BulkOutcome.UPDATED
     }
 
-    private suspend fun bulkLyrics(track: DesktopTrack): Boolean {
+    /**
+     * One song's lyrics. Only an answer comes back as an outcome; a lookup that
+     * couldn't reach the services throws [BulkFailure], so the song stays unmarked.
+     *
+     * Lyrics already kept (fetched while playing, or pasted by hand) are left
+     * alone unless [keepStored] is off, which Fix does: picking a song out is
+     * the instruction to look again.
+     */
+    private suspend fun bulkLyrics(track: DesktopTrack, keepStored: Boolean = true): BulkOutcome {
         val (title, artist) = lyricsQueryFor(track)
-        val (result, provider) = lyricsChain.fetch(
-            title, artist, track.album, track.durationMs
+        return lyricsStep(
+            lyricsChain, store, track.file.absolutePath, title, artist, track.album, track.durationMs, keepStored
         )
-        if (result !is LyricsFetch.Found) return false
-        io {
-            store.saveLyrics(
-                track.file.absolutePath, result.plain, result.synced, provider ?: "unknown"
-            )
-        }
-        return true
     }
 
-    private suspend fun bulkIdentify(track: DesktopTrack): Boolean {
-        val match = listenTo(track) ?: return false
+    private suspend fun bulkIdentify(track: DesktopTrack): BulkOutcome {
+        val samples = when (val sampled = MediaAudio.sample(track.file, track.durationMs)) {
+            is SampleOutcome.Ok -> sampled.samples
+            SampleOutcome.NeedsFfmpeg -> throw BulkFailure(
+                "couldn't be opened (ffmpeg is missing)",
+                GiveUp("Identify by sound needs ffmpeg for these files, and it is missing.", "once it is back")
+            )
+            // An unreadable file stays unreadable; trying it again next run won't help.
+            is SampleOutcome.Failed -> return BulkOutcome.NOTHING_FOUND
+        }
+        val match = when (val heard = shazam.recognize(samples)) {
+            is RecognitionResult.Found -> heard.matches.firstOrNull() ?: return BulkOutcome.NOTHING_FOUND
+            RecognitionResult.NoMatch -> return BulkOutcome.NOTHING_FOUND
+            is RecognitionResult.Error ->
+                // These two are about the file, and will say the same next time.
+                if (heard.message.startsWith("No audio") || heard.message.startsWith("Could not fingerprint")) {
+                    return BulkOutcome.NOTHING_FOUND
+                } else {
+                    throw BulkFailure(
+                        "couldn't be identified (${heard.message})",
+                        GiveUp("Shazam can't be reached right now.")
+                    )
+                }
+        }
+        var changed = false
         if (writeTags) {
-            io {
-                TagWriter.write(
-                    track.file, match.title, match.artist, match.album, match.releaseYear
-                )
+            val title = match.title.unlessSame(track.title)
+            val artist = match.artist.unlessSame(track.artist)
+            val album = match.album.unlessSame(track.album)
+            val year = match.releaseYear?.takeIf { it != track.year }
+            if (title != null || artist != null || album != null || year != null) {
+                val wrote = io { TagWriter.write(track.file, title, artist, album, year) }
+                if (wrote.isFailure) throw writeFailure(wrote)
+                changed = true
             }
         }
-        coverOf(match)?.let { Covers.fetchAndStore(track, it, writeTags) }
-        return true
+        coverOf(match)?.let { if (Covers.fetchAndStore(track, it, writeTags)) changed = true }
+        return if (changed) BulkOutcome.UPDATED else BulkOutcome.ALREADY_HAD
     }
+
+    /** This value, unless the file already says the same (spacing aside). */
+    private fun String?.unlessSame(current: String?): String? =
+        this?.takeIf { it.isNotBlank() && it.trim() != current?.trim() }
 
     // ---- Playlists ----------------------------------------------------------
 
@@ -3946,6 +4109,52 @@ class DesktopController(parent: CoroutineScope) {
     // Kept in Downloader: the download choices, yt-dlp and ffmpeg, and the
     // queue. These hand the UI's calls through to it.
 
+    /**
+     * Gives a song that has just landed (downloaded, or applied from a match)
+     * the cover it needs, the way the Covers bulk tool would: the same six
+     * services, the same writing into the file. It is told apart from the bulk
+     * tool by never running over the library, only over what is handed to it.
+     */
+    private val autoCover = AutoCover(
+        searcher = object : CoverSearcher {
+            override suspend fun search(track: DesktopTrack, hint: CoverHint?): CoverSearch {
+                val troubleBefore = Http.troubleCount
+                val started = System.nanoTime()
+                // WAV has no room for a cover: it is kept beside the song instead.
+                val embed = writeTags && track.file.extension.lowercase() != "wav"
+                suspend fun keep(url: String): Boolean =
+                    Covers.fetchAndStore(track, url, embed).also { stored ->
+                        // Kept because Discord needs an address, not a local file.
+                        if (stored) io { store.saveCoverUrl(track.file.absolutePath, url) }
+                    }
+
+                // The catalogue's own picture first, if the match came with one.
+                val own = hint?.artworkUrl?.takeIf { coverProviderOn(hint?.provider) }
+                var found = own != null && keep(own)
+                if (!found) {
+                    val query = hint?.query?.takeIf { it.isNotBlank() } ?: track.searchQuery
+                    found = coverLookup().findArtwork(query, giveUpMs = COVER_GIVE_UP_MS) { url ->
+                        keep(url).takeIf { it }
+                    } != null
+                }
+                val timedOut = (System.nanoTime() - started) / 1_000_000 >= COVER_GIVE_UP_MS
+                return AutoCoverRule.judge(found, troubleBefore, Http.troubleCount, timedOut)
+            }
+        },
+        ledger = object : CoverLedger {
+            override suspend fun hasArt(track: DesktopTrack) = io { Covers.hasOwnArt(track) }
+            // The same mark the Covers bulk tool leaves, so neither asks again.
+            override suspend fun tried(track: DesktopTrack) =
+                io { store.isMarked(track.file.absolutePath, BulkKind.COVERS.markColumn!!) }
+            override suspend fun markTried(track: DesktopTrack) =
+                io { store.mark(track.file.absolutePath, BulkKind.COVERS.markColumn!!) }
+        },
+        readTracks = { files -> FolderLibrary.readFiles(files) },
+        enabled = { downloadEmbedArt },
+        // The file changed under its row: the row is read again.
+        changed = { files -> addToLibrary(files) }
+    )
+
     private val downloader = Downloader(
         scope = scope,
         settings = settings,
@@ -3953,7 +4162,8 @@ class DesktopController(parent: CoroutineScope) {
         linkFinder = linkFinder,
         signIn = signIn,
         addToLibrary = { files -> addToLibrary(files) },
-        rescan = { rescan() }
+        rescan = { rescan() },
+        covers = autoCover
     )
 
     val tools: ToolStatus get() = downloader.tools
@@ -4585,6 +4795,51 @@ class DesktopController(parent: CoroutineScope) {
     /** The Settings tab on show, kept here so the palette can open Settings at one. */
     var settingsTab by mutableStateOf(SettingsTab.LIBRARY)
 
+    // ---- Back and forward (the mouse's side buttons, Ctrl+K) -------------------------------
+
+    /** The places the user has been; DesktopApp reports each one, see [recordPlace]. */
+    val navHistory = NavHistory()
+
+    /** Takes the shell to a place: it owns the page, so it sets this while it is on screen. */
+    var navigator: ((NavPlace) -> Unit)? = null
+
+    // Bumped whenever the history changes, so what shows it (the palette's rows) follows.
+    private var navVersion by mutableIntStateOf(0)
+
+    val canGoBack: Boolean get() = navVersion >= 0 && navHistory.canGoBack
+    val canGoForward: Boolean get() = navVersion >= 0 && navHistory.canGoForward
+
+    /** The screen now shows [place]: one the user went to, or the one history just sent them to (then nothing is added). */
+    fun recordPlace(place: NavPlace) {
+        navHistory.visit(place)
+        navVersion++
+    }
+
+    /** To the place before this one; false when there is none. */
+    fun goBack(): Boolean = go(navHistory.back())
+
+    /** To the place after this one; false when there is none. */
+    fun goForward(): Boolean = go(navHistory.forward())
+
+    private fun go(place: NavPlace?): Boolean {
+        if (place == null) return false
+        navigator?.invoke(place)
+        navVersion++
+        return true
+    }
+
+    /** Whether a dialog or the palette is open, for the mouse's Back: it closes that instead of leaving the page. */
+    val modalOpen: Boolean get() = paletteOpen || Modals.any
+
+    /** Closes what is on top - the palette is drawn over the dialogs - false when nothing is open. */
+    fun closeModal(): Boolean {
+        if (paletteOpen) {
+            paletteOpen = false
+            return true
+        }
+        return Modals.closeTop()
+    }
+
     // ---- Genres --------------------------------------------------------------------
 
     /** Every genre in the library with how many songs carry it, commonest first. */
@@ -4826,6 +5081,15 @@ class DesktopController(parent: CoroutineScope) {
 /** How many songs the cover and tag tools look up at once. */
 private const val SONGS_AT_ONCE = 5
 
+/** A breath between one worker's songs for the tools that ask online services, so they aren't hammered. */
+private const val BULK_PACE_MS = 250L
+
+/** The tools that ask services online. */
+private val ONLINE = setOf(BulkKind.COVERS, BulkKind.TAGS, BulkKind.LYRICS, BulkKind.IDENTIFY)
+
+/** The tools whose whole point is writing names into the files, which "Write tags" being off forbids. */
+private val WRITES_TAGS = setOf(BulkKind.TAGS, BulkKind.FOLDERS, BulkKind.IDENTIFY)
+
 /**
  * How long one song's tag lookup may take. Every track goes through the tag
  * tool, not only the ones missing something, so a slow service is cut off
@@ -4856,6 +5120,9 @@ private fun List<DesktopTrack>.newestFirst(): List<DesktopTrack> =
 /** What to send a catalogue when looking a track up. */
 private val DesktopTrack.searchQuery: String
     get() = listOfNotNull(artist?.takeIf { it.isNotBlank() }, title).joinToString(" ")
+
+/** How long the cover services get to answer before a search gives up; as in the bulk tool. */
+private const val COVER_GIVE_UP_MS = 15_000L
 
 /** Steps in the accent's ease from one cover to the next, about 0.4 s. */
 private const val COVER_STEPS = 16

@@ -1,6 +1,8 @@
 package com.exo.musicplayer.data.recognition
 
 import com.exo.musicplayer.data.net.Http
+import com.exo.musicplayer.data.net.HttpTally
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -121,6 +123,8 @@ class MetadataProviderChain(private val providers: List<MetadataProvider>) {
         query: String,
         patienceMs: Long = 1_500,
         giveUpMs: Long = 15_000,
+        /** Counts whether the services could be reached at all, for a caller that must tell "none" from "offline". */
+        reach: HttpTally? = null,
         decide: suspend (answers: List<List<MusicMatch>?>, patient: Boolean, last: Boolean) -> Verdict<T>
     ): T? {
         val results = AtomicReferenceArray<List<MusicMatch>?>(providers.size)
@@ -128,8 +132,11 @@ class MetadataProviderChain(private val providers: List<MetadataProvider>) {
         // that is missed loses nothing.
         val wake = Channel<Unit>(Channel.CONFLATED)
         providers.forEachIndexed { index, provider ->
-            lookups.launch {
-                results.set(index, runCatching { provider.search(query, 5) }.getOrDefault(emptyList()))
+            lookups.launch(if (reach != null) Http.counting(reach) else EmptyCoroutineContext) {
+                val found = runCatching { provider.search(query, 5) }.getOrDefault(emptyList())
+                // Results mean somebody answered, whatever connection the provider used.
+                if (found.isNotEmpty()) reach?.answered(200)
+                results.set(index, found)
                 wake.trySend(Unit)
             }
         }
@@ -166,10 +173,11 @@ class MetadataProviderChain(private val providers: List<MetadataProvider>) {
         query: String,
         patienceMs: Long = 1_500,
         giveUpMs: Long = 15_000,
+        reach: HttpTally? = null,
         use: suspend (url: String) -> T?
     ): T? {
         val tried = HashSet<String>()
-        return askAll(query, patienceMs, giveUpMs) { answers, patient, last ->
+        return askAll(query, patienceMs, giveUpMs, reach) { answers, patient, last ->
             for (answer in answers) {
                 if (answer == null) {
                     // A better-placed provider is still thinking and there is
@@ -212,7 +220,8 @@ class MetadataProviderChain(private val providers: List<MetadataProvider>) {
         artist: String?,
         title: String,
         patienceMs: Long = 1_500,
-        giveUpMs: Long = 15_000
+        giveUpMs: Long = 15_000,
+        reach: HttpTally? = null
     ): SongDetails? {
         val query = listOfNotNull(artist?.takeIf { it.isNotBlank() }, title).joinToString(" ")
         val wantedTitle = MatchRanker.tokens(title)
@@ -238,7 +247,7 @@ class MetadataProviderChain(private val providers: List<MetadataProvider>) {
                 }
         }
 
-        return askAll(query, patienceMs, giveUpMs) { answers, patient, last ->
+        return askAll(query, patienceMs, giveUpMs, reach) { answers, patient, last ->
             val matches = answers.mapIndexed { index, answer -> answer?.let { sameSong(index, it) } }
             var waiting = false
 

@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.exo.musicplayer.desktop.data.BulkJob
 import com.exo.musicplayer.desktop.data.BulkKind
+import com.exo.musicplayer.desktop.data.bulkRunningCounts
 import com.exo.musicplayer.desktop.data.DesktopController
 import com.exo.musicplayer.desktop.data.DesktopDuplicateGroup
 import com.exo.musicplayer.desktop.data.FIX_LABEL
@@ -76,6 +77,8 @@ fun ScrimDialog(
     onDismiss: () -> Unit,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
+    // So the mouse's Back button can close it, as Esc closes it.
+    Modals.Register(onDismiss)
     Box(
         Modifier
             .fillMaxSize()
@@ -310,6 +313,14 @@ private fun JobProgress(controller: DesktopController, job: BulkJob) {
                     )
                     GhostButton("Run again") { controller.runBulkAgain() }
                 }
+            }
+            // The counts so far, so a run that finds nothing says so while it runs.
+            if (job.running && job.done > 0) {
+                Text(
+                    bulkRunningCounts(job),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Palette.TextFaint
+                )
             }
             if (job.running && job.skipped > 0) {
                 Text(
