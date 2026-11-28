@@ -59,6 +59,7 @@ import com.exo.musicplayer.desktop.ui.LyricsWindow
 import com.exo.musicplayer.desktop.ui.FullscreenLyrics
 import com.exo.musicplayer.desktop.ui.TrimWindow
 import com.exo.musicplayer.desktop.ui.MiniPlayer
+import com.exo.musicplayer.desktop.ui.SideButtonsHost
 import com.exo.musicplayer.desktop.ui.Palette
 import com.exo.musicplayer.desktop.ui.LucenseDesktopTheme
 import com.exo.musicplayer.desktop.ui.ScaledToWindow
@@ -242,6 +243,8 @@ private fun lucense(args: Array<String>) = application {
             }
             WindowCorners.round(window)
         }
+        // The mouse's side buttons, over the whole window: see MouseButtons.kt.
+        SideButtonsHost(window, shortcuts) {
         CompositionLocalProvider(LocalWindowFrame provides frame) {
             LucenseDesktopTheme {
                 // Drawn, not laid out: when the window can't be faded as a whole, the picture is.
@@ -256,6 +259,7 @@ private fun lucense(args: Array<String>) = application {
                     WindowEdges(frame)
                 }
             }
+        }
         }
     }
 
@@ -287,12 +291,14 @@ private fun lucense(args: Array<String>) = application {
                     if (at is WindowPosition.Absolute) controller.settings.miniPlayerAt = "${at.x.value},${at.y.value}"
                 }
             }
+            SideButtonsHost(window, playbackKeys) {
             LucenseDesktopTheme {
                 MiniPlayer(
                     controller,
                     onExpand = { controller.showWindow() },
                     onClose = { controller.miniPlayer = false }
                 )
+            }
             }
         }
     }
@@ -327,7 +333,7 @@ private fun lucense(args: Array<String>) = application {
             }
         ) {
             EveryIconSize()
-            LucenseDesktopTheme { FullscreenLyrics(controller) }
+            SideButtonsHost(window, playbackKeys) { LucenseDesktopTheme { FullscreenLyrics(controller) } }
         }
     }
 
@@ -342,8 +348,10 @@ private fun lucense(args: Array<String>) = application {
         ) {
             EveryIconSize()
             LaunchedEffect(Unit) { window.minimumSize = Dimension(300, 360) }
+            SideButtonsHost(window, playbackKeys) {
             LucenseDesktopTheme {
                 ScaledToWindow(designWidth = 420.dp, designHeight = 560.dp) { LyricsWindow(controller) }
+            }
             }
         }
     }

@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -310,7 +312,7 @@ fun CommandPalette(
         item.run()
     }
 
-    val actions = remember(controller.shuffle) {
+    val actions = remember(controller.shuffle, controller.canGoBack, controller.canGoForward) {
         paletteActions(controller, onGo, onSettings, onBulk, onDuplicates)
     }
     val library = remember(controller.tracks, controller.playlists, controller.smartPlaylists) {
@@ -543,6 +545,19 @@ private fun paletteActions(
             onSettings(SettingsTab.ABOUT)
         }
     )
+    // Where the mouse's Back and Forward go, listed only when there is somewhere to go.
+    if (controller.canGoBack) {
+        list += PaletteItem(
+            a, "Go back", "To the page you were on before", Icons.AutoMirrored.Filled.ArrowBack,
+            hint = "Mouse Back", words = "previous page history return"
+        ) { controller.goBack() }
+    }
+    if (controller.canGoForward) {
+        list += PaletteItem(
+            a, "Go forward", "To the page you came back from", Icons.AutoMirrored.Filled.ArrowForward,
+            hint = "Mouse Forward", words = "next page history"
+        ) { controller.goForward() }
+    }
     // The same family's other mode, as the Dark / Light row in Settings; Custom has none.
     val theme = controller.accent
     themeSwitchTitle(theme)?.let { title ->

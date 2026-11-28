@@ -9,6 +9,7 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import com.exo.musicplayer.desktop.data.DesktopController
+import com.exo.musicplayer.desktop.system.Platform
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
 
@@ -77,6 +78,17 @@ class WindowShortcuts(
 
         /** Ctrl+K, with no [text]: opens the palette, or closes it when open. With [text], opens it with that in it. */
         fun openPalette(text: String? = null) = Unit
+
+        /** The mouse's Back and Forward as pages: to the place before or after this one; false when there is none. */
+        fun goBack(): Boolean = false
+        fun goForward(): Boolean = false
+
+        /** Whether a dialog or the palette is open, and closing the one on top (as Esc would); false when none. */
+        fun modalOpen(): Boolean = false
+        fun closeModal(): Boolean = false
+
+        /** What the mouse's side buttons do in the main window. */
+        fun mouseMode(): MouseButtonsMode = MouseButtonsMode.NAVIGATE
     }
 
     /**
@@ -159,6 +171,25 @@ class WindowShortcuts(
         }
     }
 
+    /**
+     * A press of the mouse's button [awtButton] (4 and 5, or 6 and 7 on Linux; see [mouseSideOf]).
+     * True when it was Back or Forward, whether or not that did anything, so the
+     * press is not also given to what is under the pointer. Typing does not matter:
+     * a mouse press is not a key. Once per press - the caller sends presses, not releases.
+     */
+    fun mouseButton(awtButton: Int, linux: Boolean = Platform.isLinux): Boolean {
+        val side = mouseSideOf(awtButton, linux) ?: return false
+        when (mouseAction(side, actions.mouseMode(), playbackOnly, actions.modalOpen())) {
+            MouseAction.GO_BACK -> actions.goBack()
+            MouseAction.GO_FORWARD -> actions.goForward()
+            MouseAction.PREVIOUS_SONG -> actions.previous()
+            MouseAction.NEXT_SONG -> actions.next()
+            MouseAction.CLOSE_MODAL -> actions.closeModal()
+            null -> Unit
+        }
+        return true
+    }
+
     private inline fun act(action: () -> Unit): Boolean {
         action()
         return true
@@ -203,6 +234,11 @@ fun DesktopController.shortcutActions(): WindowShortcuts.Actions {
         override fun focusSearch(): Boolean = SearchBoxes.focus()
         override fun cycleAbLoop() = controller.cycleAbLoop()
         override fun openPalette(text: String?) = controller.openPalette(text)
+        override fun goBack() = controller.goBack()
+        override fun goForward() = controller.goForward()
+        override fun modalOpen() = controller.modalOpen
+        override fun closeModal() = controller.closeModal()
+        override fun mouseMode() = controller.mouseButtons
     }
 }
 

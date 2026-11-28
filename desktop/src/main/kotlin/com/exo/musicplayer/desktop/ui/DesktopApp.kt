@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Explore
@@ -126,6 +127,29 @@ fun DesktopApp(
         controller.openGroup(kind, key)
         destination = if (kind == CollectionKind.ALBUMS) Destination.ALBUMS else Destination.ARTISTS
         showSettings = false
+    }
+
+    // Where the user is, for Back and Forward (the mouse's side buttons, Ctrl+K). Every way of
+    // moving - the rail, a card, a name link, Settings, the palette, Esc from an album - changes
+    // this, so one effect records them all. Going back sets the screen to a place the history
+    // already holds as current, so that is not recorded again (see NavHistory.visit).
+    val place = NavPlace(
+        destination = destination,
+        groupKind = destination.collectionKind?.takeIf { controller.openGroupKey(it) != null },
+        groupKey = destination.collectionKind?.let { controller.openGroupKey(it) },
+        settingsOpen = showSettings,
+        settingsTab = controller.settingsTab.takeIf { showSettings }
+    )
+    LaunchedEffect(place) { controller.recordPlace(place) }
+    DisposableEffect(controller) {
+        controller.navigator = { to ->
+            destination = to.destination
+            // The page's own album or artist: shut when the place had none open.
+            to.destination.collectionKind?.let { controller.openGroup(it, to.groupKey) }
+            to.settingsTab?.let { controller.settingsTab = it }
+            showSettings = to.settingsOpen
+        }
+        onDispose { controller.navigator = null }
     }
 
     // What is playing, not where in it: see collectNowPlaying.

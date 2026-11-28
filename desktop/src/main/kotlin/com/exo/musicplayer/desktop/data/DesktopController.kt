@@ -25,6 +25,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
@@ -107,6 +108,10 @@ import com.exo.musicplayer.desktop.ui.AccentChoice
 import com.exo.musicplayer.desktop.ui.BackdropStyle
 import com.exo.musicplayer.desktop.ui.DesktopFxState
 import com.exo.musicplayer.desktop.ui.Palette
+import com.exo.musicplayer.desktop.ui.Modals
+import com.exo.musicplayer.desktop.ui.MouseButtonsMode
+import com.exo.musicplayer.desktop.ui.NavHistory
+import com.exo.musicplayer.desktop.ui.NavPlace
 import com.exo.musicplayer.desktop.ui.ReactiveMode
 import com.exo.musicplayer.desktop.ui.SidePanelKind
 import com.exo.musicplayer.desktop.ui.ThemeColors
@@ -1136,6 +1141,16 @@ class DesktopController(parent: CoroutineScope) {
         set(value) {
             Notes.on = value
             settings.hoverNotes = value
+        }
+
+    private val mouseButtonsState = mutableStateOf(MouseButtonsMode.fromName(settings.mouseButtons))
+
+    /** What the mouse's side buttons do in the main window: page history, or previous and next song. */
+    var mouseButtons: MouseButtonsMode
+        get() = mouseButtonsState.value
+        set(value) {
+            mouseButtonsState.value = value
+            settings.mouseButtons = value.name
         }
 
     /** Whether the extra controls are shown; [Advanced.on] is the state, this keeps it and the setting together. */
@@ -4584,6 +4599,51 @@ class DesktopController(parent: CoroutineScope) {
 
     /** The Settings tab on show, kept here so the palette can open Settings at one. */
     var settingsTab by mutableStateOf(SettingsTab.LIBRARY)
+
+    // ---- Back and forward (the mouse's side buttons, Ctrl+K) -------------------------------
+
+    /** The places the user has been; DesktopApp reports each one, see [recordPlace]. */
+    val navHistory = NavHistory()
+
+    /** Takes the shell to a place: it owns the page, so it sets this while it is on screen. */
+    var navigator: ((NavPlace) -> Unit)? = null
+
+    // Bumped whenever the history changes, so what shows it (the palette's rows) follows.
+    private var navVersion by mutableIntStateOf(0)
+
+    val canGoBack: Boolean get() = navVersion >= 0 && navHistory.canGoBack
+    val canGoForward: Boolean get() = navVersion >= 0 && navHistory.canGoForward
+
+    /** The screen now shows [place]: one the user went to, or the one history just sent them to (then nothing is added). */
+    fun recordPlace(place: NavPlace) {
+        navHistory.visit(place)
+        navVersion++
+    }
+
+    /** To the place before this one; false when there is none. */
+    fun goBack(): Boolean = go(navHistory.back())
+
+    /** To the place after this one; false when there is none. */
+    fun goForward(): Boolean = go(navHistory.forward())
+
+    private fun go(place: NavPlace?): Boolean {
+        if (place == null) return false
+        navigator?.invoke(place)
+        navVersion++
+        return true
+    }
+
+    /** Whether a dialog or the palette is open, for the mouse's Back: it closes that instead of leaving the page. */
+    val modalOpen: Boolean get() = paletteOpen || Modals.any
+
+    /** Closes what is on top - the palette is drawn over the dialogs - false when nothing is open. */
+    fun closeModal(): Boolean {
+        if (paletteOpen) {
+            paletteOpen = false
+            return true
+        }
+        return Modals.closeTop()
+    }
 
     // ---- Genres --------------------------------------------------------------------
 
