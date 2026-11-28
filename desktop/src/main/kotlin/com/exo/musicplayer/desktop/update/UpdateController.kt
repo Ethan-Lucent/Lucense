@@ -395,7 +395,9 @@ class UpdateController(
         val elevation = UpdateApplier.elevation(layout, made, findProgram)
         if (elevation is Elevation.Impossible) return HelperStart.Failed(elevation.reason)
         val staging = stager.folder(made.version)
-        val script = UpdateApplier.writeScript(staging, layout.windows)
+        // Only the Windows helper without elevation runs from a staged file, as the
+        // user; anything that gets administrator rights is handed its code in memory.
+        val script = if (layout.windows && elevation == Elevation.None) UpdateApplier.writeScript(staging) else null
         val planFile = UpdateApplier.writePlan(made, staging)
         resultFile.delete()
         val request = HelperRequest(
@@ -411,7 +413,7 @@ class UpdateController(
             script = script
         )
         val command = UpdateApplier.command(request, setsid = if (layout.windows) null else findProgram("setsid"))
-        val process = UpdateApplier.start(command, staging, helperEnvironment)
+        val process = UpdateApplier.start(command, staging, helperEnvironment + UpdateApplier.environment(request))
         // Someone may need a while to type a password; without a prompt it is instant.
         val timeout = if (elevation == Elevation.None) 30_000L else 5 * 60_000L
         return UpdateApplier.awaitStart(process, staging, timeout)

@@ -1,24 +1,50 @@
 # Lucense's update helper (Windows). Windows PowerShell 5.1 or later.
 #
 # The running app can't replace its own jars (Windows keeps them locked), so it
-# stages the new files, writes this script and a plan next to them, starts the
-# script and exits. This waits for the app to be gone, backs up every file it
+# stages the new files, writes a plan next to them, starts this script and
+# exits. This waits for the app to be gone, backs up every file it
 # is about to replace or delete, puts the new files in place, checks every one
 # against the SHA-256 in the plan and starts Lucense again. If anything at all
 # goes wrong it puts every old file back from the backup, so the install is
 # either all old or all new, never half of each.
 #
-#   apply-update.ps1 MODE PID ROOT STAGING VERSION PLAN RESULT LAUNCHER
+#   apply-update.ps1 MODE PID ROOT STAGING VERSION PLAN RESULT LAUNCHER [TOKEN]
 #
-#   MODE      run           do the swap as this user, then start Lucense
-#             run-elevated  do the swap in an administrator copy of this script
-#                           (the UAC prompt), then start Lucense as this user
-#             swap          (elevated) the swap only
+#   MODE      run   do the swap as this user, then start Lucense. Run from a
+#                   copy in the staging folder: it has only the user's rights.
+#             swap  (as administrator) the swap only. Never run from a file:
+#                   the app passes this script's text as an encoded command
+#                   (UpdateApplier.elevatedEncoded), which
+#                   apply-update-elevate.ps1 starts through the UAC prompt, so
+#                   no file the user can write is ever run as administrator.
 #   PLAN      one line per file: path<TAB>sha256<TAB>exec(0|1); per old jar: stale<TAB>path
 #   LAUNCHER  the launcher, relative to ROOT (Lucense.exe)
+#   TOKEN     (swap) 32 hex digits; the state file says 'ready TOKEN', so the
+#             elevation step knows the answer is this run's
+#
+# As administrator this writes nothing into the user's folders: its backup,
+# state, result and log go into ROOT\.lucense-update, inside the install,
+# which only administrators can change (the elevation step copies the state
+# and result over as the user). A link or junction planted in the user's
+# folder would otherwise send an administrator's write anywhere on the system.
+# What it does read from there (the plan, the staged files) is data: every
+# path is checked, and it refuses to go through a link or junction on the way.
+# A link swapped in between that check and the read is still possible (Windows
+# PowerShell has no way to open a file and refuse links in one step); it can
+# only change what is read, and a file that doesn't match the plan's SHA-256
+# is rolled back.
+#
+# What the administrator still takes on trust: the plan and the staged files
+# come from the user's folder, so whoever can write there can change which
+# files an update the user approved puts into the install (any path under
+# ROOT, any content, with hashes to match, since they are in that same plan).
+# Closing that needs a release manifest the administrator can check by itself
+# (a signature); until then this is the known remaining risk.
 #
 # File names are only read from the plan and passed as -LiteralPath values,
 # never pasted into a command line, so a name can't turn into a command.
+# No here-strings or block comments: UpdateApplier.compact drops every line
+# that starts with '#'.
 param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Mode,
     [Parameter(Mandatory = $true, Position = 1)][string]$AppPid,
@@ -27,7 +53,8 @@ param(
     [Parameter(Mandatory = $true, Position = 4)][string]$Version,
     [Parameter(Mandatory = $true, Position = 5)][string]$Plan,
     [Parameter(Mandatory = $true, Position = 6)][string]$Result,
-    [Parameter(Mandatory = $true, Position = 7)][string]$Launcher
+    [Parameter(Mandatory = $true, Position = 7)][string]$Launcher,
+    [Parameter(Position = 8)][string]$Token = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +64,16 @@ $Files = Join-Path $Staging 'files'
 $Backup = Join-Path $Staging 'backup'
 $StateFile = Join-Path $Staging 'apply.state'
 $LogFile = Join-Path $Staging ('apply-' + $Mode + '.log')
+# The administrator's own folder (see the top); only used by swap.
+$Private = Join-Path $Root '.lucense-update'
+if ($Mode -eq 'swap') {
+    $Backup = Join-Path $Private 'backup'
+    $StateFile = Join-Path $Private 'apply.state'
+    $LogFile = Join-Path $Private 'apply-swap.log'
+}
+# Changed, not reassigned, from inside functions: the elevated copy runs as a
+# script block, where a $script: variable would be a different one.
+$Keep = @{ Backup = $false }
 $WaitSeconds = 60
 if ($env:LUCENSE_UPDATE_WAIT_SECONDS -match '^[0-9]+$') { $WaitSeconds = [int]$env:LUCENSE_UPDATE_WAIT_SECONDS }
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -67,6 +104,24 @@ function Test-SafeRelative([string]$Path) {
         if ($part -eq '..' -or $part -eq '.' -or $part.EndsWith('.') -or $part.EndsWith(' ')) { return $false }
     }
     return $true
+}
+
+# A symbolic link or a junction (both are reparse points).
+function Test-Link([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    return ($null -ne $item -and (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0))
+}
+
+# Neither $Base nor any part of $Relative under it may be a link: followed as
+# administrator, one planted in the user's folder would read, and one in the
+# install would write, somewhere else entirely.
+function Assert-NoLink([string]$Base, [string]$Relative) {
+    $here = $Base
+    if (Test-Link $here) { throw ($Relative + ' is reached through a link.') }
+    foreach ($part in $Relative.Split('/')) {
+        $here = Join-Path $here $part
+        if (Test-Link $here) { throw ($Relative + ' is reached through a link.') }
+    }
 }
 
 function Get-Native([string]$Relative) {
@@ -128,6 +183,7 @@ function Wait-App {
 
 function Read-Plan {
     $lines = New-Object System.Collections.Generic.List[object]
+    Assert-NoLink $Staging ($Plan.Substring($Staging.Length + 1).Replace('\', '/'))
     foreach ($text in [System.IO.File]::ReadAllLines($Plan, $Utf8)) {
         if ($text.Length -eq 0) { continue }
         $fields = $text.Split("`t")
@@ -157,8 +213,10 @@ $Folders = New-Object System.Collections.Generic.List[string]
 
 function Invoke-Swap($Lines) {
     foreach ($line in $Lines) {
+        Assert-NoLink $Root $line.Path
         $dest = Get-Native $line.Path
         if (-not $line.Stale) {
+            Assert-NoLink $Staging ('files/' + $line.Path)
             $source = Join-Path $Files ($line.Path.Replace('/', '\'))
             if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw ('The downloaded copy of ' + $line.Path + ' is missing.') }
         }
@@ -272,6 +330,8 @@ function Invoke-Update {
     Write-Log ('failed: ' + $failure)
     $problems = Invoke-Rollback
     if ($problems -gt 0) {
+        # Kept: the backup is the only copy of the old files now.
+        $Keep.Backup = $true
         $failure = $failure + ' Putting the old files back failed too; please reinstall Lucense with the installer. The old files are in ' + $Backup + '.'
     }
     Write-Result $false $failure
@@ -287,8 +347,10 @@ function Start-App {
 }
 
 # Arguments are checked before anything else: if they are wrong, the app and
-# this script disagree, and nothing is touched.
-if (@('run', 'run-elevated', 'swap') -notcontains $Mode) { Stop-Refused 'unknown mode' }
+# this script disagree, and nothing is touched. First of all, before even a log
+# line is written there: the administrator's folder must not be a link.
+if ($Mode -eq 'swap' -and (Test-Link $Private)) { exit 2 }
+if (@('run', 'swap') -notcontains $Mode) { Stop-Refused 'unknown mode' }
 if ($AppPid -notmatch '^[0-9]+$') { Stop-Refused 'bad process id' }
 if ($Version -notmatch '^[0-9]+(\.[0-9]+)*$') { Stop-Refused 'bad version' }
 foreach ($path in @($Root, $Staging, $Plan, $Result)) { if (-not (Test-Absolute $path)) { Stop-Refused ('not a plain absolute path: ' + $path) } }
@@ -305,40 +367,20 @@ if ($Mode -eq 'run') {
 }
 
 if ($Mode -eq 'swap') {
-    Write-State 'ready'
+    if ($Token -notmatch '^[0-9a-f]{32}$') { Stop-Refused 'bad token' }
+    # Where the administrator's answers go (see the top); the elevation step
+    # copies the result to the user's RESULT.
+    $Result = Join-Path $Private 'result.json'
+    [void][System.IO.Directory]::CreateDirectory($Private)
+    foreach ($old in @($StateFile, $Result, ($StateFile + '.tmp'), ($Result + '.tmp'))) { Remove-Quietly $old }
+    Write-State ('ready ' + $Token)
     try { Invoke-Update } catch {
         Write-Log ('helper failed: ' + $_.Exception.Message)
         try { Write-Result $false ('The update helper failed: ' + $_.Exception.Message) } catch { }
     }
+    # The backup is inside the install: it goes, unless it holds the only copy of the old files.
+    if (-not $Keep.Backup) {
+        try { if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force } } catch { Write-Log ('could not remove the backup: ' + $_.Exception.Message) }
+    }
     exit 0
 }
-
-# run-elevated: the swap runs in an administrator copy of this script (Windows
-# shows its UAC prompt for it); Lucense is started afterwards from here, as the
-# user. The elevated copy writes result.json and the backup into the user's
-# own folder, which it was given, and files made there inherit that folder's
-# permissions, so the user can read and remove them afterwards.
-Remove-Quietly $StateFile
-$self = $MyInvocation.MyCommand.Path
-$quoted = @($Mode, $AppPid, $Root, $Staging, $Version, $Plan, $Result, $Launcher) | ForEach-Object { '"' + $_ + '"' }
-$quoted[0] = '"swap"'
-$argumentLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $self + '" ' + ($quoted -join ' ')
-try {
-    $elevated = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $argumentLine -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-} catch {
-    # The UAC prompt was dismissed, or this account may not elevate.
-    Write-Log ('not elevated: ' + $_.Exception.Message)
-    Write-State 'cancelled'
-    exit 0
-}
-$state = ''
-if (Test-Path -LiteralPath $StateFile) { $state = [System.IO.File]::ReadAllText($StateFile).Trim() }
-if ($state -ne 'ready') {
-    Write-State 'failed'
-    exit 0
-}
-if (-not (Test-Path -LiteralPath $Result)) {
-    Write-Result $false ('The update helper stopped unexpectedly (status ' + $elevated.ExitCode + ').')
-}
-Start-App
-exit 0
