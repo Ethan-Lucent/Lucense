@@ -5,11 +5,9 @@
 name: Windows
 
 on:
-  # A change to this file on the working branch builds that branch's version
-  # (v + lucenseVersion) - workflow_dispatch only offers workflows on the default branch.
+  # Every release tag pushed (v1.56.5, ...): its own Windows build, attached to its release.
   push:
-    branches: [nux/fixes]
-    paths: [".github/workflows/windows.yml"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -78,7 +76,9 @@ jobs:
       # one a person's drag runs). Compose shows an uncaught error as a box titled
       # "Error"; any such box, or the app gone, fails the build.
       - name: Start Lucense, resize it, look for error boxes
-        shell: pwsh
+        # Windows PowerShell (.NET Framework): PowerShell 7 drops the default
+        # assemblies (List<> among them) once others are referenced.
+        shell: powershell
         run: |
           Add-Type @"
           using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
@@ -101,6 +101,15 @@ jobs:
               }, IntPtr.Zero);
               return found;
             }
+            public static List<string> All() {
+              var found = new List<string>();
+              EnumWindows((h, l) => {
+                uint p; GetWindowThreadProcessId(h, out p);
+                if (IsWindowVisible(h)) { var s = new StringBuilder(256); GetWindowText(h, s, 256); if (s.Length > 0) found.Add(p + " " + s.ToString()); }
+                return true;
+              }, IntPtr.Zero);
+              return found;
+            }
             public static void Shot(string path) {
               var b = System.Windows.Forms.SystemInformation.VirtualScreen;
               using (var bmp = new System.Drawing.Bitmap(b.Width, b.Height))
@@ -109,13 +118,28 @@ jobs:
           }
           "@ -ReferencedAssemblies System.Drawing, System.Windows.Forms
           New-Item -ItemType Directory -Force smoke | Out-Null
-          $p = Start-Process "desktop/build/compose/binaries/main/app/Lucense/Lucense.exe" -PassThru
-          $main = $null
+          function Save-Logs {
+            Get-ChildItem "$env:LOCALAPPDATA\Lucense", "$env:APPDATA\Lucense" -Recurse -Filter *.log -ErrorAction SilentlyContinue |
+              Copy-Item -Destination smoke/ -ErrorAction SilentlyContinue
+          }
+          $started = Start-Process "desktop/build/compose/binaries/main/app/Lucense/Lucense.exe" -PassThru
+          $main = $null; $p = $null
           for ($i = 0; $i -lt 60 -and -not $main; $i++) {
             Start-Sleep 2
-            $main = [W]::Of($p.Id) | Where-Object { $_.Value -eq "Lucense" } | Select-Object -First 1
+            # The window may belong to another process than the one started (a launcher), so any process's.
+            foreach ($proc in Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'Lucense|java' }) {
+              $w = [W]::Of($proc.Id) | Where-Object { $_.Value -eq "Lucense" } | Select-Object -First 1
+              if ($w) { $main = $w; $p = $proc; break }
+            }
           }
-          if (-not $main) { "No Lucense window:"; [W]::Of($p.Id) | ForEach-Object { $_.Value }; exit 1 }
+          if (-not $main) {
+            "No Lucense window. Started process exited: $($started.HasExited) code: $(if ($started.HasExited) { $started.ExitCode })"
+            "Lucense/java processes:"; Get-Process | Where-Object { $_.ProcessName -match 'Lucense|java' } | Format-Table Id, ProcessName, MainWindowTitle | Out-String
+            "Visible windows (pid title):"; [W]::All() | ForEach-Object { "  $_" }
+            [W]::Shot("$PWD/smoke/0-no-window.png")
+            Save-Logs; exit 1
+          }
+          "Lucense window in process $($p.Id) ($($p.ProcessName)); started process $($started.Id)"
           Start-Sleep 10
           [W]::Shot("$PWD/smoke/1-started.png")
 
@@ -148,8 +172,7 @@ jobs:
           $errors = @($windows | Where-Object { $_.Value -eq "Error" })
           $alive = -not $p.HasExited
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Get-ChildItem $env:APPDATA, $env:LOCALAPPDATA -Recurse -Filter *.log -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -like '*Lucense*' } | Copy-Item -Destination smoke/ -ErrorAction SilentlyContinue
+          Save-Logs
           "alive=$alive errorBoxes=$($errors.Count)"
           if (-not $alive -or $errors.Count -gt 0) { exit 1 }
 

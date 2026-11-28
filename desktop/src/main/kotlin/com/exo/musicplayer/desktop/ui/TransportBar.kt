@@ -143,9 +143,9 @@ internal fun TransportBar(
                     // Each artist named goes to their page - when the song is one of the
                     // library's, so there is a page to go to.
                     artist = when {
-                        track == null -> AnnotatedString("—")
+                        track == null -> NameLinks.plain("—")
                         inLibrary -> artistLinks(track) { onOpenGroup(CollectionKind.ARTISTS, it) }
-                        else -> AnnotatedString(track.displayArtist)
+                        else -> NameLinks.plain(track.displayArtist)
                     },
                     titleModifier = Modifier.dragOutFiles { listOfNotNull(track?.file) },
                     favourite = track?.let { it.file.absolutePath in controller.favourites },
@@ -242,7 +242,9 @@ internal fun RowScope.BarNowPlaying(
     narrow: Boolean,
     cover: @Composable () -> Unit,
     title: String,
-    artist: AnnotatedString,
+    // Lucense's own clickable names, not Compose's built-in links (see NameLinks.kt: those threw
+    // while a narrow window cut a name off, which showed as "Unknown error" boxes on Windows).
+    artist: NameLinks,
     titleModifier: Modifier,
     /** Null when nothing is playing (no heart); otherwise whether it is a favourite. */
     favourite: Boolean?,
@@ -262,12 +264,10 @@ internal fun RowScope.BarNowPlaying(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
+            LinkedText(
                 artist,
                 style = MaterialTheme.typography.bodySmall,
-                color = Palette.TextDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                color = Palette.TextDim
             )
         }
     }

@@ -751,21 +751,17 @@ private fun SongRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
+                LinkedText(
                     artistLinks(track, actions.openArtist),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Palette.TextDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    color = Palette.TextDim
                 )
             }
             if (artistPage && roomy) {
-                Text(
+                LinkedText(
                     albumLink(track, actions.openAlbum),
                     style = MaterialTheme.typography.bodySmall,
                     color = Palette.TextDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(0.8f).padding(end = 12.dp)
                 )
             }
