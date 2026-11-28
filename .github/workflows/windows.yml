@@ -65,6 +65,18 @@ jobs:
           Copy-Item "$bin/msi/Lucense-$version.msi" out/
           # The portable build is the app image itself, which the MSI is packaged from.
           Compress-Archive -Path "$bin/app/Lucense" -DestinationPath "out/Lucense-$version-windows-x64.zip"
+          # What in-app updates read: a manifest of every file of that same app image
+          # (already built above, so this only hashes it), and the zip just made.
+          # The zip must hold one entry per file named Lucense/<path> with forward
+          # slashes, which PowerShell 7's Compress-Archive does and Windows
+          # PowerShell 5.1's does not: this step has to stay on pwsh. The check below
+          # fails the build (before anything is attached) if the two ever disagree.
+          gradle :desktop:appManifest --console=plain
+          if ($LASTEXITCODE -ne 0) { throw "appManifest failed" }
+          $manifest = "Lucense-$version-windows-x64-manifest.json"
+          Copy-Item "desktop/build/release/$manifest" out/
+          python tools/verify-manifest.py "out/$manifest" "out/Lucense-$version-windows-x64.zip" --image "$bin/app/Lucense" --no-exec
+          if ($LASTEXITCODE -ne 0) { throw "the manifest and the zip disagree" }
           Get-ChildItem out | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
           } | Set-Content -Encoding ascii out/SHA256SUMS-windows

@@ -24,6 +24,9 @@ sdk files/
 *.rar
 *.zip
 
+# What tools/release-linux.sh collects for a release.
+/out/
+
 # Scratch output from build and probe scripts.
 *.log
 .chain.sh
