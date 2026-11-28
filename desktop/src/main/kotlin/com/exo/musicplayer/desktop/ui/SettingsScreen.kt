@@ -155,6 +155,7 @@ internal val settingsIndex: List<SettingEntry> = buildList {
     add(SettingEntry("Show what you're playing on Discord", "rich presence, sharing", links))
     add(SettingEntry("Keyboard shortcuts", "keys, hotkeys", SettingsTab.KEYS))
     add(SettingEntry("Updates", "check for a new version", SettingsTab.ABOUT))
+    add(SettingEntry("Tell me when an update is available", "update notice, new version at start, launch, notification, off", SettingsTab.ABOUT))
     add(SettingEntry("Backups", "back up favourites and playlists, restore", SettingsTab.ABOUT))
     add(SettingEntry("Data folder", "where Lucense keeps its files", SettingsTab.ABOUT))
     add(SettingEntry("Logs", "log files for bug reports", SettingsTab.ABOUT, true))

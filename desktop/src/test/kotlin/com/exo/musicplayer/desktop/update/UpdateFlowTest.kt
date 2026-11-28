@@ -121,7 +121,9 @@ class UpdateFlowTest {
         assertEquals(5, summary.files)
         assertEquals(2, summary.stale)
         assertEquals("Version 1.1.0 is out.", updater.note)
-        assertEquals(0, server.requests.count { it.startsWith("/storage/") }, "nothing downloaded before the button")
+        // The check reads the zip's directory (to know the real download size), not its files.
+        val atCheck = server.rangeBytesAsked.get()
+        assertTrue(atCheck in 1..100_000, "only the zip's end was read before the button: $atCheck of ${zipBytes.size}")
 
         updater.download()
         assertIs<UpdateState.Ready>(updater.settle { it is UpdateState.Ready || it is UpdateState.Failed }, "state: ${updater.state}")
@@ -129,7 +131,8 @@ class UpdateFlowTest {
         assertTrue(File(updates, "1.1.0/files").walkTopDown().none { it.name.endsWith(".part") })
         val fetched = server.rangeBytesAsked.get()
         assertTrue(fetched < zipBytes.size / 2, "fetched $fetched of ${zipBytes.size}")
-        assertEquals(1, server.requests.count { it.startsWith("/releases/download/v1.1.0/Lucense-1.1.0-linux-x64.zip") })
+        // Once to learn the download size at the check, once for the download.
+        assertEquals(2, server.requests.count { it.startsWith("/releases/download/v1.1.0/Lucense-1.1.0-linux-x64.zip") })
 
         updater.applyAndRestart()
         UpdateTestKit.until { exits.get() == 1 }

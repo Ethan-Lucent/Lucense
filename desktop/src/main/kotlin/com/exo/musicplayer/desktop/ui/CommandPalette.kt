@@ -502,6 +502,9 @@ internal fun themeSwitchTitle(theme: AccentChoice): String? = when {
     else -> "Switch to light theme"
 }
 
+/** The Ctrl+K action's name follows the setting: it offers the opposite. */
+internal fun updateNoticeActionLabel(on: Boolean) = if (on) "Turn update notices off" else "Turn update notices on"
+
 private fun paletteActions(
     controller: DesktopController,
     onGo: (Destination) -> Unit,
@@ -537,6 +540,11 @@ private fun paletteActions(
             subtitle = "The extra controls for tuning everything",
             icon = Icons.Default.Tune, words = "advanced expert more extra options settings"
         ) { controller.advancedMode = !controller.advancedMode },
+        PaletteItem(
+            a, updateNoticeActionLabel(controller.updateNotice),
+            subtitle = "Whether Lucense offers new versions when it starts",
+            icon = Icons.Default.Refresh, words = "update upgrade notice notify new version launch startup"
+        ) { controller.updateNotice = !controller.updateNotice },
         PaletteItem(a, "Bulk tools", "Change many songs at once", Icons.Default.AutoFixHigh, words = "edit tags") { onBulk() },
         PaletteItem(a, "Find duplicates", icon = Icons.Default.FilterNone, words = "doubles copies") { onDuplicates() },
         PaletteItem(a, "Rescan library", "Look through the music folders again", Icons.Default.Refresh, words = "refresh scan") { controller.rescan() },

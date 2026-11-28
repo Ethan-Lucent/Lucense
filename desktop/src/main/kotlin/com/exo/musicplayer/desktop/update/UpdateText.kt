@@ -31,8 +31,12 @@ object UpdateText {
         return "Downloading $files ($done of $total)"
     }
 
+    /** A download size: "4.6 MB", or "up to 77 MB" when only the installed (uncompressed) total is known. */
+    fun transfer(bytes: Long, exact: Boolean = true): String = if (exact) size(bytes) else "up to ${size(bytes)}"
+
     /** The main button: "Update to 1.58.0  (4.6 MB)". */
-    fun updateButton(version: String, bytes: Long): String = "Update to $version  (${size(bytes)})"
+    fun updateButton(version: String, bytes: Long, exact: Boolean = true): String =
+        "Update to $version  (${transfer(bytes, exact)})"
 
     fun updated(version: String) = "Updated to $version."
 

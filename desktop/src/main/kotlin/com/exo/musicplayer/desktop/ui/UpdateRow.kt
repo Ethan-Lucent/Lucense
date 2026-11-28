@@ -36,14 +36,14 @@ fun UpdateRow(controller: DesktopController, openLink: (String) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Updates", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
-            Hint(updateLine(state, controller.updateNote))
+            Hint(updateLine(state, controller.updateNote, controller.updateNotice))
         }
         when (state) {
             is UpdateState.Available -> {
                 val summary = state.summary
                 when {
                     state.canDelta && summary != null -> {
-                        AccentButton(UpdateText.updateButton(state.release.version, summary.bytes), note = Notes.UPDATE_DELTA) { updater.download() }
+                        AccentButton(UpdateText.updateButton(state.release.version, summary.transferBytes, summary.transferExact), note = Notes.UPDATE_DELTA) { updater.download() }
                         Spacer(Modifier.width(8.dp))
                         GhostButton("Full installer", note = Notes.UPDATE_FULL) { openLink(state.release.page) }
                     }
@@ -110,11 +110,23 @@ fun UpdateRow(controller: DesktopController, openLink: (String) -> Unit) {
         }
         else -> Unit
     }
+    Spacer(Modifier.height(6.dp))
+    Noted(null, Notes.UPDATE_NOTICE) {
+        CheckRow(
+            UPDATE_NOTICE_LABEL,
+            controller.updateNotice,
+            note = UPDATE_NOTICE_HINT
+        ) { controller.updateNotice = it }
+    }
 }
 
-/** The line under "Updates", for each state. */
-internal fun updateLine(state: UpdateState, note: String?): String = when (state) {
-    UpdateState.Idle -> note ?: "Looked up when Lucense starts."
+internal const val UPDATE_NOTICE_LABEL = "Tell me when an update is available"
+internal const val UPDATE_NOTICE_HINT = "When Lucense starts it looks for a newer version and offers to install it. " +
+    "Turn this off and it stays quiet and doesn't look: use Check now when you want."
+
+/** The line under "Updates", for each state; [lookedUpAtStart] is the setting that says whether Lucense looks by itself. */
+internal fun updateLine(state: UpdateState, note: String?, lookedUpAtStart: Boolean = true): String = when (state) {
+    UpdateState.Idle -> note ?: if (lookedUpAtStart) "Looked up when Lucense starts." else "Not looked up by itself: use Check now."
     UpdateState.Checking -> "Looking for a newer version…"
     is UpdateState.Available -> when {
         !state.canDelta -> "Version ${state.release.version} is out." + (state.whyNot?.let { " $it" } ?: "")

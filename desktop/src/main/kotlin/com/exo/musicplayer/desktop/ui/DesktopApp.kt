@@ -11,6 +11,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -117,6 +118,9 @@ fun DesktopApp(
     LaunchedEffect(destination) { controller.settings.screen = destination.name }
     var showSettings by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<DialogKind?>(null) }
+    // Anything that takes the whole window's attention: the card waits until it is closed.
+    val modalOpen = dialog != null || controller.paletteOpen || controller.showShortcuts ||
+        controller.editTarget != null || controller.editMany.isNotEmpty() || controller.fixTargets.isNotEmpty()
     var playlistTargets by remember { mutableStateOf<List<DesktopTrack>>(emptyList()) }
     // What each page saved when it was last left - see the page switch below.
     val pages = rememberSaveableStateHolder()
@@ -346,7 +350,15 @@ fun DesktopApp(
                     }
                     // Whatever is being previewed, from Identify or Discover,
                     // with its pause and its X, in the corner of every page.
-                    PreviewCard(controller, Modifier.align(Alignment.BottomEnd).padding(16.dp))
+                    // The update card sits above it, in the same corner: clear of the player bar and the header.
+                    Column(
+                        Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        UpdateNoticeHost(controller, modalOpen)
+                        PreviewCard(controller)
+                    }
                 }
 
                 val panel = controller.sidePanel

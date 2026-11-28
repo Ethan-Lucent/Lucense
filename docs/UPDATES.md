@@ -93,6 +93,31 @@ pair: every entry's name, size, SHA-256 and exec bit, that nothing is missing or
 extra, that every file of the image is listed once, and (`--range`) that one small
 entry can be read through HTTP range requests alone.
 
+## What users see at launch
+
+When Lucense starts it looks for a newer release and, if one is out, shows a
+small card over the main window: "Lucense X is ready", the size of the download,
+and **Update now**, **Later** and **Skip this version**. It appears only when the
+release carries this system's manifest and zip and the install can be updated
+in place; a release without them (or a copy run from Gradle) shows nothing, and
+only Settings → About → Updates mentions it. The size shown is what is really
+downloaded (the zip's compressed sizes of the changed files, read from its
+central directory at the check), not the larger installed size; if the zip
+can't be read at that moment it says "up to" the installed total.
+
+**Update now** does everything in one go: download, verify, stage, then restart
+into the new version, with no second click (a system install asks for the
+password once). It stops at the first problem and keeps what was verified. **Later**
+hides the card until the next launch; **Skip this version** stays quiet about that
+version (a newer one is announced again). The card is shown at most once per
+launch, and not while a dialog or Ctrl+K is open.
+
+Settings → About → Updates has "Tell me when an update is available" (on by
+default). Off means Lucense doesn't look at startup at all, so no network traffic
+and no card; **Check now** and the Settings row work as before. The result of an
+update (done, or rolled back and why) is shown once in the same card after the
+restart.
+
 ## Cutting a release
 
 1. Bump `lucenseVersion` in `gradle.properties`; commit it (the script refuses a

@@ -276,6 +276,19 @@ class DesktopSettings(
         get() = prefs.getBoolean(KEY_HOVER_NOTES, true)
         set(value) = prefs.putBoolean(KEY_HOVER_NOTES, value)
 
+    /**
+     * Whether Lucense looks for a newer version when it starts and offers to
+     * install it. Off means no lookup at launch at all: "Check now" still works.
+     */
+    var updateNotice: Boolean
+        get() = prefs.getBoolean(KEY_UPDATE_NOTICE, true)
+        set(value) = prefs.putBoolean(KEY_UPDATE_NOTICE, value)
+
+    /** The version the user chose "Skip this version" for; a newer one is announced again. */
+    var updateSkipped: String
+        get() = prefs.get(KEY_UPDATE_SKIPPED, "")
+        set(value) = prefs.put(KEY_UPDATE_SKIPPED, value)
+
     /** A MouseButtonsMode name: what the mouse's side buttons do in the main window. */
     var mouseButtons: String
         get() = prefs.get(KEY_MOUSE_BUTTONS, "NAVIGATE")
@@ -500,6 +513,8 @@ class DesktopSettings(
         const val KEY_DISCORD_COVER = "discord_cover"
         const val KEY_NOTIFY_SONGS = "notify_songs"
         const val KEY_HOVER_NOTES = "hover_notes"
+        const val KEY_UPDATE_NOTICE = "update_notice"
+        const val KEY_UPDATE_SKIPPED = "update_skipped"
         const val KEY_MOUSE_BUTTONS = "mouse_buttons"
         const val KEY_ADVANCED_MODE = "advanced_mode"
         const val KEY_RAIL_MORE = "rail_more_open"
