@@ -15,7 +15,7 @@ desugarJdkLibs = "2.1.2"
 dbusJava = "5.2.2"
 composeMultiplatform = "1.7.3"
 # Backdrop blur for the Windows glass look; 1.2.2 is the one built on Compose 1.7.3.
-haze = "1.2.2"
+haze = "2.1.0"
 sqliteJdbc = "3.47.1.0"
 jaudiotagger = "3.0.1"
 kotlinxCoroutines = "1.9.0"
