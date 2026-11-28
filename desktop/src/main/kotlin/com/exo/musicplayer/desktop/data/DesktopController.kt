@@ -1137,6 +1137,14 @@ class DesktopController(parent: CoroutineScope) {
             settings.glassSeeThrough = Glass.seeThrough
         }
 
+    /** Whether the glass background is colourful rather than one calm colour (Settings > Appearance). */
+    var glassRainbow: Boolean
+        get() = Glass.colourful
+        set(value) {
+            Glass.colourful = value
+            settings.glassRainbow = value
+        }
+
     /**
      * Whether resting the mouse on a menu item shows its note. [Notes.on] is
      * already Compose state, so it is the mirror; this keeps it and the
@@ -1198,6 +1206,7 @@ class DesktopController(parent: CoroutineScope) {
     init {
         Glass.on = settings.glass
         Glass.seeThrough = settings.glassSeeThrough.coerceIn(0f, 1f)
+        Glass.colourful = settings.glassRainbow
         Notes.on = settings.hoverNotes
         Advanced.on = settings.advancedMode
         UiScale.factor = settings.uiScale.coerceIn(UI_SCALES.first().second, UI_SCALES.last().second)

@@ -137,6 +137,7 @@ internal val settingsIndex: List<SettingEntry> = buildList {
     add(SettingEntry("Glass see-through", "how much of the background shows through the glass", look, true) {
         it.glassSeeThrough != Glass.SEE_THROUGH_DEFAULT
     })
+    add(SettingEntry("Colourful glow", "the glass background drifts through several hues, rainbow, calm, liquid glass", look))
     add(SettingEntry("Take the accent from the song's cover", "colours from the artwork", look))
     add(SettingEntry("Show notes when hovering", "tooltips, help text", look))
     add(SettingEntry("Show advanced options", "expert extra controls", look))
@@ -491,6 +492,17 @@ private fun AppearanceSettings(controller: DesktopController) {
                     "How much of what's behind the panes shows through them. 50% is the standard look; " +
                         "lower is more frosted, higher thins the frost until your wallpaper shows nearly as it is."
                 )
+            }
+        }
+        if (controller.glass) {
+            // Under the box it belongs to, in line with Liquid glass's own options.
+            Column(Modifier.padding(start = 25.dp)) {
+                CheckRow(
+                    "Colourful glow",
+                    controller.glassRainbow,
+                    note = "The glass background drifts through several hues instead of staying close to your theme's colour."
+                ) { controller.glassRainbow = it }
+                Hint("The glass background drifts through several hues instead of staying close to your theme's colour.")
             }
         }
         Spacer(Modifier.height(6.dp))
