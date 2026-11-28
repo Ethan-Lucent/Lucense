@@ -454,7 +454,8 @@ private fun Animated(
         // Resuming after a pause is not a slow frame.
         guard.restart()
         val raw = FloatArray(spectrum?.bands() ?: 1)
-        var lastTick = 0L
+        // Which display frames get a step: see [FramePacer].
+        val pacer = FramePacer()
         // Ticks in a row that changed nothing to see.
         var still = 0
         while (isActive) {
@@ -491,19 +492,22 @@ private fun Animated(
                 seconds.floatValue = now
             }
             if (moving) {
-                // About sixty updates a second, each on a display frame: these move
-                // with the music, and at thirty a second their motion stepped. No
-                // more than that, though - every update redraws the window, and a
-                // fast screen would otherwise redraw it at its full rate. Stepped
-                // inside the frame, so that frame draws it: stepped after, it took
-                // a second frame to show.
-                val wait = (FRAME_NANOS - (System.nanoTime() - lastTick)) / 1_000_000L - FRAME_SLACK_MS
-                if (wait > 0) delay(wait)
+                // Up to about sixty updates a second, each on a display frame: these move
+                // with the music, and at thirty a second their motion stepped. No more
+                // than that, though - every update redraws the window, and a fast screen
+                // would otherwise redraw it at its full rate. The rate is held by
+                // skipping frames of the display's own clock, never by sleeping: a sleep
+                // is rounded up to the system timer's tick, which on Windows is 15.6 ms,
+                // so a wait meant to be ten milliseconds became sixteen or thirty-one and
+                // then waited again for the next frame - a low, uneven rate that Linux
+                // (a 1 ms timer) never showed. Stepped inside the frame, so that frame
+                // draws it: stepped after, it took a second frame to show.
                 withFrameNanos { frameNanos ->
-                    guard.frame(frameNanos)
-                    advance()
+                    if (pacer.due(frameNanos)) {
+                        guard.frame(frameNanos)
+                        advance()
+                    }
                 }
-                lastTick = System.nanoTime()
             } else {
                 delay(50L)
                 advance()
@@ -610,11 +614,35 @@ internal class FrameGuard(private val slowNanos: Long = 45_000_000L) {
 
 private fun wrap(value: Float) = ((value % 1f) + 1f) % 1f
 
-/** About sixty a second, for the backdrops that move with the music. */
-private const val FRAME_NANOS = 16_600_000L
+/**
+ * Decides which frames of the display's clock step a moving backdrop, so it runs
+ * at the display's rate up to a cap and never waits on a timer.
+ *
+ *  * A step is due when at least [minIntervalNanos] have passed since the last one.
+ * The default, 9.5 ms, steps 30, 60, 75, 90 and 100 Hz screens on every frame, a
+ * 120 Hz one on every second (60 a second), a 144 Hz one on every second (72), a
+ * 165 Hz one on every second (82) and a 240 Hz one on every third (80), where
+ * stepping every frame would redraw the whole window at the screen's full speed.
+ */
+internal class FramePacer(private val minIntervalNanos: Long = MIN_STEP_NANOS) {
+    private var last = 0L
 
-/** Woken this much early, so the next display frame isn't missed and the rate halved. */
-private const val FRAME_SLACK_MS = 4L
+    /** Whether the frame at [frameNanos] on the display's clock should step the backdrop. */
+    fun due(frameNanos: Long): Boolean {
+        if (last != 0L && frameNanos - last < minIntervalNanos) return false
+        last = frameNanos
+        return true
+    }
+
+    /** The clock stopped for a while: the next frame always steps. */
+    fun restart() {
+        last = 0L
+    }
+
+    companion object {
+        const val MIN_STEP_NANOS = 9_500_000L
+    }
+}
 
 /** Less than this between ticks reads as nothing moving. */
 private const val SETTLED_CHANGE = 0.0005f
