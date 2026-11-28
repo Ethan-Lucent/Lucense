@@ -1,5 +1,6 @@
 package com.exo.musicplayer.data.lyrics
 
+import com.exo.musicplayer.data.net.Http
 import com.exo.musicplayer.data.net.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -13,7 +14,12 @@ sealed interface LyricsFetch {
     data class Found(val plain: String?, val synced: String?) : LyricsFetch
     data object NotFound : LyricsFetch
     data object Instrumental : LyricsFetch
-    data class Error(val message: String) : LyricsFetch
+    /**
+     * No answer about the song: a service couldn't be reached or timed out, so
+     * nothing can be concluded and the song is worth asking about again.
+     * [offline] when not one service answered at all, which is the connection.
+     */
+    data class Error(val message: String, val offline: Boolean = false) : LyricsFetch
 }
 
 /**
@@ -125,7 +131,9 @@ class LrcLibClient {
                 in 200..299 ->
                     Response.Ok(connection.inputStream.bufferedReader().use { it.readText() })
                 404 -> Response.NotFound
-                else -> Response.Failed("Lyrics service returned HTTP $code.")
+                // A refusal that will be the same next time is an answer; "try later" is not.
+                in 400..499 -> if (Http.isAnswer(code)) Response.NotFound else Response.Failed("LRCLIB returned HTTP $code.")
+                else -> Response.Failed("LRCLIB returned HTTP $code.")
             }
         } finally {
             connection.disconnect()

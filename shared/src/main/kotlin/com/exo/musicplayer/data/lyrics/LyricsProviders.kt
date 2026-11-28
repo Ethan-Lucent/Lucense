@@ -1,11 +1,16 @@
 package com.exo.musicplayer.data.lyrics
 
 import com.exo.musicplayer.data.net.Http
+import com.exo.musicplayer.data.net.HttpTally
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /** One place lyrics can come from. */
@@ -20,8 +25,9 @@ interface LyricsProvider {
  * Ordered by what they give back, not by popularity: LRCLIB first because it is
  * the only one of the three that reliably carries *timed* LRC, then NetEase
  * which often does, then lyrics.ovh which is plain text but has broad Western
- * coverage. A provider erroring out is treated the same as finding nothing, so
- * one service being down never blocks the rest.
+ * coverage. One service being down never blocks the rest, but it does stop the
+ * answer from being "not found": only services that really answered can say
+ * a song has no lyrics, and the bulk tool marks a song checked on that.
  */
 private val LYRIC_BRACKETS = Regex("""\(.*?\)|\[.*?]|【.*?】""")
 private val LYRIC_SPACES = Regex("""\s+""")
@@ -30,8 +36,17 @@ private val LYRIC_ARTIST_SPLIT = Regex("""\s*(,|&|\bx\b|\bfeat\.?|\bft\.?)\s*"""
 class LyricsProviderChain(
     private val providers: List<LyricsProvider>,
     /** Whether the service by this name is to be asked; Settings can turn each off. */
-    private val isOn: (String) -> Boolean = { true }
+    private val isOn: (String) -> Boolean = { true },
+    /** How long one service gets to answer; a hung request must not hold the song forever. */
+    private val providerTimeoutMs: Long = PROVIDER_TIMEOUT_MS
 ) {
+    /**
+     * Where each service's lookup runs. Not the caller's scope: the services
+     * block in plain socket reads that a timeout can't interrupt, so a service
+     * that is given up on finishes (or fails) on its own, and its answer is dropped.
+     */
+    private val calls = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     /** What the services are called, in the order they are asked. */
     val labels: List<String> get() = providers.map { it.label }
 
@@ -46,13 +61,37 @@ class LyricsProviderChain(
         album: String?,
         durationMs: Long
     ): Pair<LyricsFetch, String?> {
-        var first: Pair<LyricsFetch, String?>? = null
-        for ((pieceTitle, pieceArtist) in segments(title, artist)) {
-            val result = fetchOnce(pieceTitle, pieceArtist, album, durationMs)
-            if (result.first is LyricsFetch.Found || result.first is LyricsFetch.Instrumental) return result
-            if (first == null) first = result
+        val enabled = providers.filter { isOn(it.label) }
+        if (enabled.isEmpty()) {
+            return LyricsFetch.Error("All the lyrics services are turned off in Settings.", offline = true) to null
         }
-        return first ?: (LyricsFetch.NotFound to null)
+        val pieces = segments(title, artist)
+        if (pieces.isEmpty()) return LyricsFetch.NotFound to null
+        val round = Round()
+        for ((pieceTitle, pieceArtist) in pieces) {
+            val result = fetchOnce(enabled, round, pieceTitle, pieceArtist, album, durationMs)
+            if (result.first is LyricsFetch.Found || result.first is LyricsFetch.Instrumental) return result
+            // Nobody answered at all: other spellings of the name won't reach them either.
+            if (!round.anyAnswered) break
+        }
+        return when {
+            !round.anyAnswered -> LyricsFetch.Error(
+                round.lastError ?: "Couldn't reach the lyrics services.", offline = true
+            ) to null
+            // Some services never answered, so "not found" would be a guess.
+            round.down.isNotEmpty() -> LyricsFetch.Error(
+                "${round.down.joinToString()} didn't answer, so this isn't a definite \"not found\"."
+            ) to null
+            else -> LyricsFetch.NotFound to null
+        }
+    }
+
+    /** What one song's lookup has learnt so far, across the spellings of its name. */
+    private class Round {
+        var anyAnswered = false
+        /** Services that failed once: not asked again for this song, and "not found" is off the table. */
+        val down = linkedSetOf<String>()
+        var lastError: String? = null
     }
 
     /** The name as given, then without brackets, split at " - ", and by the first artist alone. */
@@ -71,32 +110,62 @@ class LyricsProviderChain(
     }
 
     private suspend fun fetchOnce(
+        enabled: List<LyricsProvider>,
+        round: Round,
         title: String,
         artist: String?,
         album: String?,
         durationMs: Long
     ): Pair<LyricsFetch, String?> {
         var sawInstrumental = false
-        for (provider in providers) {
-            if (!isOn(provider.label)) continue
-            // A service failing is "nothing from it", but stopping the run is not: caught
-            // here as a failure, a cancelled lookup came back as NotFound and the song was
-            // recorded as checked when it never had been.
-            val result = try {
-                provider.fetch(title, artist, album, durationMs)
-            } catch (cancelled: CancellationException) {
-                currentCoroutineContext().ensureActive()
-                LyricsFetch.NotFound
-            } catch (failure: Throwable) {
-                LyricsFetch.NotFound
-            }
-            when (result) {
+        for (provider in enabled) {
+            if (provider.label in round.down) continue
+            when (val result = ask(provider, title, artist, album, durationMs)) {
                 is LyricsFetch.Found -> return result.tidied() to provider.label
-                is LyricsFetch.Instrumental -> sawInstrumental = true
-                else -> Unit
+                is LyricsFetch.Instrumental -> { round.anyAnswered = true; sawInstrumental = true }
+                is LyricsFetch.NotFound -> round.anyAnswered = true
+                is LyricsFetch.Error -> { round.down += provider.label; round.lastError = result.message }
             }
         }
         return (if (sawInstrumental) LyricsFetch.Instrumental else LyricsFetch.NotFound) to null
+    }
+
+    /**
+     * One service's answer, with its failures said out loud. Most services say
+     * NotFound when their request failed; the [HttpTally] catches that, and a
+     * service that throws or takes longer than [providerTimeoutMs] is an Error.
+     */
+    private suspend fun ask(
+        provider: LyricsProvider,
+        title: String,
+        artist: String?,
+        album: String?,
+        durationMs: Long
+    ): LyricsFetch {
+        val tally = HttpTally()
+        val call = calls.async(Http.counting(tally)) { provider.fetch(title, artist, album, durationMs) }
+        val result = try {
+            withTimeoutOrNull(providerTimeoutMs) { call.await() }
+                ?: LyricsFetch.Error("${provider.label} took too long to answer.")
+        } catch (cancelled: CancellationException) {
+            // Stopping the run is not a failed service: caught as one, a cancelled
+            // lookup was recorded as checked when it never had been.
+            currentCoroutineContext().ensureActive()
+            LyricsFetch.Error("${provider.label} gave up.")
+        } catch (failure: Throwable) {
+            LyricsFetch.Error("${provider.label} failed: ${failure.message ?: failure.javaClass.simpleName}")
+        } finally {
+            call.cancel()
+        }
+        return if (result is LyricsFetch.NotFound && tally.failed > 0) {
+            LyricsFetch.Error("Couldn't reach ${provider.label}.")
+        } else {
+            result
+        }
+    }
+
+    private companion object {
+        const val PROVIDER_TIMEOUT_MS = 12_000L
     }
 }
 
