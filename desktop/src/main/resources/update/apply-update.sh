@@ -89,18 +89,54 @@ if [ "$MODE" = swap ]; then
     case $OWNER_GID in -|*[!0-9]*) refuse "bad owner group" ;; esac
 fi
 
+# Running as root (under pkexec), everything that lives in the user's own
+# folders - the plan, the staged files, the state and result files - is read
+# and written with the user's rights, through setpriv, never root's: those
+# folders are the user's to change at any moment, and root following a link
+# planted there could read or overwrite any file on the system. Root itself
+# only touches the install and a private folder of its own.
+# (Run as root in any other mode, root is the user, and there is no one else
+# to act for.)
+AS_ROOT=no
+if [ "$MODE" = swap ] && [ "$(id -u)" = 0 ]; then
+    AS_ROOT=yes
+    command -v setpriv >/dev/null 2>&1 || refuse "setpriv is missing"
+fi
+
+as_user() {
+    if [ "$AS_ROOT" = yes ]; then
+        setpriv --reuid="$OWNER_UID" --regid="$OWNER_GID" --clear-groups -- "$@"
+    else
+        "$@"
+    fi
+}
+
 FILES="$STAGING/files"
-BACKUP="$STAGING/backup"
-WORK="$STAGING/apply"
 STATE="$STAGING/apply.state"
+if [ "$AS_ROOT" = yes ]; then
+    # Made fresh by root, with a name nobody can guess, readable by root alone.
+    PRIVATE=$(mktemp -d /var/tmp/lucense-update.XXXXXX) || refuse "no private folder"
+    BACKUP="$PRIVATE/backup"
+    WORK="$PRIVATE/work"
+else
+    PRIVATE=""
+    BACKUP="$STAGING/backup"
+    WORK="$STAGING/apply"
+fi
 # How long to wait for the app to close. The tests shorten it; it is only a number.
 WAIT_SECONDS=${LUCENSE_UPDATE_WAIT_SECONDS:-60}
 case $WAIT_SECONDS in ''|*[!0-9]*) WAIT_SECONDS=60 ;; esac
 
+# Writes stdin to the file $1 (in the user's folders) as the user, whole or not at all.
+put_user_file() {
+    as_user /bin/sh -c 'cat > "$1.tmp" && mv -f -- "$1.tmp" "$1"' put "$1"
+}
+
 # The app watches this file: "ready" means the helper is running (with the
-# rights it needs) and the app may exit; "cancelled"/"denied" mean it must not.
+# rights it needs) and the app may exit; "cancelled", "denied" or "failed"
+# mean it must not.
 write_state() {
-    printf '%s\n' "$1" > "$STATE.tmp" && mv -f -- "$STATE.tmp" "$STATE"
+    printf '%s\n' "$1" | put_user_file "$STATE"
 }
 
 json_text() {
@@ -108,17 +144,16 @@ json_text() {
 }
 
 write_result() {
-    mkdir -p -- "$(dirname -- "$RESULT")"
+    as_user mkdir -p -- "$(dirname -- "$RESULT")"
     if [ "$1" = true ]; then
-        printf '{"ok":true,"version":"%s"}\n' "$VERSION" > "$RESULT.tmp"
+        printf '{"ok":true,"version":"%s"}\n' "$VERSION" | put_user_file "$RESULT"
     else
-        printf '{"ok":false,"version":"%s","error":"%s"}\n' "$VERSION" "$(json_text "$2")" > "$RESULT.tmp"
+        printf '{"ok":false,"version":"%s","error":"%s"}\n' "$VERSION" "$(json_text "$2")" | put_user_file "$RESULT"
     fi
-    mv -f -- "$RESULT.tmp" "$RESULT"
 }
 
 result_ok() {
-    [ -f "$RESULT" ] && grep -q '"ok":true' "$RESULT"
+    as_user grep -q '"ok":true' -- "$RESULT" 2>/dev/null
 }
 
 sha_of() {
@@ -188,7 +223,7 @@ swap_files() {
         elif [ "$target" = "$first" ]; then
             printf '%s\n' "$target" >> "$WORK/created.list"
         fi
-    done < "$PLAN"
+    done < "$WORK/plan"
 
     while IFS="$TAB" read -r first second third; do
         [ -n "$first" ] || continue
@@ -203,11 +238,12 @@ swap_files() {
         # Written beside the old file and renamed over it: a file is always
         # either the whole old one or the whole new one.
         rm -f -- "$dest.lucense-new"
-        cp -- "$FILES/$first" "$dest.lucense-new" || fail "Couldn't write $first."
+        # Read as the user (see as_user), written by whoever owns the install.
+        as_user cat -- "$FILES/$first" > "$dest.lucense-new" || fail "Couldn't write $first."
         if [ "$third" = 1 ]; then mode=0755; else mode=0644; fi
         chmod "$mode" "$dest.lucense-new" || fail "Couldn't set the permissions of $first."
         mv -f -- "$dest.lucense-new" "$dest" || fail "Couldn't put $first in place."
-    done < "$PLAN"
+    done < "$WORK/plan"
 }
 
 # Every installed file must hash to what the release says, and be executable
@@ -223,7 +259,7 @@ verify_files() {
         [ -f "$dest" ] || fail "$first is missing after installing."
         [ "$(sha_of "$dest")" = "$second" ] || fail "$first doesn't match the release after installing."
         if [ "$third" = 1 ] && [ ! -x "$dest" ]; then fail "$first isn't executable after installing."; fi
-    done < "$PLAN"
+    done < "$WORK/plan"
 }
 
 # Puts back every file the swap touched, takes away the ones it made, and
@@ -234,6 +270,8 @@ roll_back() {
         [ -n "$path" ] || continue
         rm -f -- "$ROOT/$path.lucense-new" || problems=1
         if grep -qxF -- "$path" "$WORK/backed-up.list"; then
+            # Never got as far as changing this one: nothing to put back.
+            if cmp -s -- "$BACKUP/$path" "$ROOT/$path"; then continue; fi
             if cp -p -- "$BACKUP/$path" "$ROOT/$path.lucense-new" && mv -f -- "$ROOT/$path.lucense-new" "$ROOT/$path"; then
                 :
             else
@@ -274,6 +312,11 @@ apply_update() {
     if [ -d "$BACKUP" ]; then mv -- "$BACKUP" "$BACKUP-$(date +%s)-$$"; fi
     rm -rf -- "$WORK"
     mkdir -p -- "$WORK" "$BACKUP"
+    # The plan is read once, as the user, into a copy only this script can change.
+    if ! as_user cat -- "$PLAN" > "$WORK/plan"; then
+        write_result false "The update plan couldn't be read, so nothing was changed."
+        return 0
+    fi
     set +e
     (set -e; swap_files)
     status=$?
@@ -295,6 +338,8 @@ apply_update() {
     set -e
     if [ "$restored" -ne 0 ]; then
         error="$error Putting the old files back failed too; please reinstall Lucense with the installer. The old files are in $BACKUP."
+        # Kept: the backup is the only copy of the old files now.
+        PRIVATE=""
     fi
     write_result false "$error"
     say "rolled back: $error"
@@ -349,13 +394,10 @@ case $MODE in
         apply_update
         status=0
         result_ok || status=1
-        # Made as root inside the user's own folders: handed back, so the app
-        # can read the result and clear the staging folder later.
-        chown -R -P "$OWNER_UID:$OWNER_GID" -- "$BACKUP" "$WORK" 2>/dev/null || true
-        chown -h "$OWNER_UID:$OWNER_GID" -- "$RESULT" "$STATE" 2>/dev/null || true
-        for old in "$BACKUP"-*; do
-            if [ -d "$old" ]; then chown -R -P "$OWNER_UID:$OWNER_GID" -- "$old" 2>/dev/null || true; fi
-        done
+        # Everything in the user's folders was written as the user, so it is
+        # theirs to read and remove; root's own folder goes unless it holds
+        # the only copy of the old files.
+        if [ -n "$PRIVATE" ]; then rm -rf -- "$PRIVATE"; fi
         exit "$status"
         ;;
 esac

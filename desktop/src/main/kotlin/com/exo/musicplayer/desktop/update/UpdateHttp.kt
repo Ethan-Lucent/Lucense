@@ -1,6 +1,7 @@
 package com.exo.musicplayer.desktop.update
 
 import com.exo.musicplayer.data.net.Http
+import com.exo.musicplayer.data.update.Updates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
@@ -31,7 +32,16 @@ class RangesUnsupportedException : UpdateException("The download server doesn't 
  */
 data class UrlPolicy(
     val trustedHosts: Set<String> = setOf("api.github.com", "github.com"),
-    val plainHttpHosts: Set<String> = emptySet()
+    val plainHttpHosts: Set<String> = emptySet(),
+    /**
+     * Where a download may start, beyond the host: this repository's API and
+     * its release files only, so a release list that somehow named another
+     * repository's (or another site's) files is not followed. Empty in tests.
+     */
+    val startPrefixes: List<String> = listOf(
+        "https://api.github.com/repos/${Updates.REPOSITORY}/",
+        "https://github.com/${Updates.REPOSITORY}/releases/download/"
+    )
 ) {
     fun checkHop(url: String): URI {
         val uri = runCatching { URI(url) }.getOrNull() ?: throw UpdateException("Not a web address: ${url.take(120)}")
@@ -47,6 +57,9 @@ data class UrlPolicy(
     fun checkStart(url: String): URI {
         val uri = checkHop(url)
         if (uri.host.lowercase() !in trustedHosts) throw UpdateException("Refusing a download from ${uri.host}")
+        if (startPrefixes.isNotEmpty() && startPrefixes.none { url.startsWith(it) }) {
+            throw UpdateException("Refusing a download from outside Lucense's releases: ${url.take(120)}")
+        }
         return uri
     }
 }
@@ -58,7 +71,7 @@ data class UrlPolicy(
  */
 class UpdateHttp(private val policy: UrlPolicy = UrlPolicy()) {
 
-    /** Seconds to wait before each retry of a failed range. */
+    /** Milliseconds to wait before each retry of a failed range. */
     var backoffMs: List<Long> = listOf(500, 1500, 3000)
 
     /** GETs [url] as text, refusing anything over [limit] bytes; null for a 404. */

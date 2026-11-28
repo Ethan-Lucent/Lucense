@@ -216,6 +216,8 @@ function Invoke-Rollback {
             Remove-Quietly ($dest + '.lucense-new')
             if ($BackedUp.Contains($path)) {
                 $copy = Join-Path $Backup ($path.Replace('/', '\'))
+                # Never got as far as changing this one: nothing to put back.
+                if ((Test-Path -LiteralPath $dest -PathType Leaf) -and ((Get-Sha $copy) -eq (Get-Sha $dest))) { continue }
                 Copy-Item -LiteralPath $copy -Destination ($dest + '.lucense-new') -Force
                 Move-Over ($dest + '.lucense-new') $dest
             } elseif ($Created.Contains($path)) {

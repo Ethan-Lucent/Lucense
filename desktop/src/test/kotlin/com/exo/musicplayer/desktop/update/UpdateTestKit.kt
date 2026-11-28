@@ -47,16 +47,16 @@ object UpdateTestKit {
                     zip.closeEntry()
                     return@forEach
                 }
-                val bytes = file.readBytes()
                 val entry = ZipEntry(prefix + path)
                 if (path in stored) {
+                    val bytes = file.readBytes()
                     entry.method = ZipEntry.STORED
                     entry.size = bytes.size.toLong()
                     entry.compressedSize = bytes.size.toLong()
                     entry.crc = CRC32().also { it.update(bytes) }.value
                 }
                 zip.putNextEntry(entry)
-                zip.write(bytes)
+                file.inputStream().use { it.copyTo(zip, 1 shl 16) }
                 zip.closeEntry()
             }
         }
@@ -116,18 +116,43 @@ object UpdateTestKit {
         return root
     }
 
+    /**
+     * A Windows app image of [version]: `Lucense.cmd` stands in for
+     * Lucense.exe and notes the version it started into [launchLog].
+     */
+    fun windowsImage(root: File, version: String, launchLog: File, extraFolder: Boolean = false): File {
+        root.mkdirs()
+        write(
+            File(root, "Lucense.cmd"),
+            ("@for /f \"tokens=3 delims==\" %%v in ('findstr /b \"java-options=-Dlucense.version\" \"%~dp0app\\Lucense.cfg\"') do @echo started %%v>>\"${launchLog.absolutePath}\"\r\n").toByteArray()
+        )
+        val v = version.replace('.', '_')
+        write(File(root, "app/Lucense.cfg"), "[Application]\r\napp.classpath=\$APPDIR\\desktop-$v.jar\r\n[JavaOptions]\r\njava-options=-Dlucense.version=$version\r\n".toByteArray())
+        write(File(root, "app/desktop-$v.jar"), text(300_000, version.hashCode()))
+        write(File(root, "app/shared-$v.jar"), text(60_000, version.hashCode() + 1))
+        write(File(root, "app/common-1.0.jar"), text(200_000, 7))
+        write(File(root, "app/resources/ffmpeg.exe"), random(150_000, 8))
+        write(File(root, "runtime/bin/java.dll"), random(20_000, 9))
+        write(File(root, "runtime/lib/modules"), random(2_000_000, 10))
+        write(File(root, "runtime/lib/server/classes.jsa"), random(500_000, version.hashCode() + 2))
+        if (extraFolder) write(File(root, "app/resources/new-folder/extra.dat"), text(5_000, 12))
+        return root
+    }
+
     /** Every file under [root] with its SHA-256 and exec bit: to compare an install before and after. */
     fun snapshot(root: File): Map<String, String> = root.walkTopDown().filter { it.isFile }.associate { file ->
         file.relativeTo(root).invariantSeparatorsPath to UpdatePlanner.sha256(file) + if (file.canExecute()) " x" else ""
     }
 
-    fun policy(): UrlPolicy = UrlPolicy(trustedHosts = setOf("127.0.0.1"), plainHttpHosts = setOf("127.0.0.1"))
+    fun policy(): UrlPolicy = UrlPolicy(trustedHosts = setOf("127.0.0.1"), plainHttpHosts = setOf("127.0.0.1"), startPrefixes = emptyList())
 
     fun http(): UpdateHttp = UpdateHttp(policy()).apply { backoffMs = listOf(10, 20, 40) }
 
     /** A process id that is certainly not running: one that has just ended. */
     fun deadPid(): Long {
-        val process = ProcessBuilder("true").redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
+        val windows = System.getProperty("os.name").startsWith("Windows")
+        val command = if (windows) listOf("cmd.exe", "/c", "exit") else listOf("true")
+        val process = ProcessBuilder(command).redirectInput(ProcessBuilder.Redirect.from(File(if (windows) "NUL" else "/dev/null"))).start()
         process.waitFor(30, TimeUnit.SECONDS)
         return process.pid()
     }
@@ -159,6 +184,9 @@ class TestServer : AutoCloseable {
     val base: String get() = "http://127.0.0.1:$port"
 
     val files = ConcurrentHashMap<String, ByteArray>()
+
+    /** Served straight from disk, for files too big to hold in memory. */
+    val onDisk = ConcurrentHashMap<String, File>()
     val redirects = ConcurrentHashMap<String, String>()
 
     @Volatile var honourRanges = true
@@ -204,6 +232,10 @@ class TestServer : AutoCloseable {
                 exchange.sendResponseHeaders(302, -1)
                 return
             }
+            onDisk[path]?.let { file ->
+                serveFile(exchange, file, range)
+                return
+            }
             val body = files[path]
             if (body == null) {
                 exchange.sendResponseHeaders(404, -1)
@@ -235,6 +267,36 @@ class TestServer : AutoCloseable {
         } finally {
             exchange.close()
         }
+    }
+
+    private fun serveFile(exchange: HttpExchange, file: File, range: String?) {
+        val length = file.length()
+        val match = range?.let { Regex("bytes=(\\d+)-(\\d+)").matchEntire(it) }
+        if (match == null || !honourRanges) {
+            exchange.sendResponseHeaders(200, length)
+            file.inputStream().use { it.copyTo(exchange.responseBody) }
+            bytesSent.addAndGet(length)
+            exchange.responseBody.close()
+            return
+        }
+        val from = match.groupValues[1].toLong()
+        val to = minOf(match.groupValues[2].toLong(), length - 1)
+        rangeBytesAsked.addAndGet(to - from + 1)
+        exchange.responseHeaders.add("Content-Range", "bytes $from-$to/$length")
+        exchange.sendResponseHeaders(206, to - from + 1)
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            raf.seek(from)
+            val buffer = ByteArray(64 * 1024)
+            var left = to - from + 1
+            while (left > 0) {
+                val n = raf.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
+                if (n < 0) break
+                exchange.responseBody.write(buffer, 0, n)
+                bytesSent.addAndGet(n.toLong())
+                left -= n
+            }
+        }
+        exchange.responseBody.close()
     }
 
     private fun send(exchange: HttpExchange, body: ByteArray, from: Int, length: Int) {

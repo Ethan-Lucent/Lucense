@@ -140,7 +140,7 @@ class ZipOverHttpTest {
 
     @Test
     fun `plain http and redirects to it are refused`(): Unit = runBlocking {
-        val strict = UpdateHttp(UrlPolicy(trustedHosts = setOf("127.0.0.1")))
+        val strict = UpdateHttp(UrlPolicy(trustedHosts = setOf("127.0.0.1"), startPrefixes = emptyList()))
         assertFailsWith<UpdateException> { zip(server.put("/a.zip", zipBytes), strict).open() }
         // Allowed to start on 127.0.0.1 over http, but the redirect goes to another plain-http host.
         server.redirects["/r.zip"] = "http://localhost:${server.port}/a.zip"
@@ -149,6 +149,10 @@ class ZipOverHttpTest {
         assertFailsWith<UpdateException> { UrlPolicy().checkStart("https://example.com/x.zip") }
         assertFailsWith<UpdateException> { UrlPolicy().checkStart("http://github.com/x.zip") }
         UrlPolicy().checkStart("https://github.com/Ethan-Lucent/Lucense/releases/download/v1/x.zip")
+        UrlPolicy().checkStart("https://api.github.com/repos/Ethan-Lucent/Lucense/releases?per_page=5")
+        // Another repository's files, on the right host, are still refused.
+        assertFailsWith<UpdateException> { UrlPolicy().checkStart("https://github.com/someone/else/releases/download/v1/x.zip") }
+        assertFailsWith<UpdateException> { UrlPolicy().checkStart("https://github.com/Ethan-Lucent/Lucense/archive/x.zip") }
         UrlPolicy().checkHop("https://objects.githubusercontent.com/x?sig=1")
     }
 
@@ -180,6 +184,43 @@ class ZipOverHttpTest {
         zip.open()
         assertEquals(65_600, zip.entries.size)
         assertEquals("file 65599", String(zip.bytesOf("Lucense/f/65599")))
+    }
+
+    /**
+     * Zips made by other tools, whose local headers carry other extra fields
+     * than their central directory (Info-ZIP's timestamps and Unix ids), or
+     * which have no folder entries (Python's): every file reads and matches
+     * the manifest.
+     */
+    @Test
+    fun `zips made by Info-ZIP and by Python read too`(): Unit = runBlocking {
+        val tools = mutableListOf<Pair<String, List<String>>>()
+        com.exo.musicplayer.desktop.system.Platform.onPath("zip")?.let {
+            tools += "info-zip.zip" to listOf(it.path, "-q", "-r", File(dir, "info-zip.zip").path, "Lucense")
+        }
+        com.exo.musicplayer.desktop.system.Platform.onPath("python3")?.let {
+            val script = "import os,zipfile\n" +
+                "z=zipfile.ZipFile('python.zip','w',zipfile.ZIP_DEFLATED)\n" +
+                "for d,_,fs in os.walk('Lucense'):\n" +
+                "  for f in sorted(fs): z.write(os.path.join(d,f))\n" +
+                "z.close()\n"
+            tools += "python.zip" to listOf(it.path, "-c", script)
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(tools.isNotEmpty())
+        image.copyRecursively(File(dir, "Lucense"))
+        val manifest = UpdateTestKit.manifestOf(image, "1.1.0")
+        for ((name, command) in tools) {
+            val process = ProcessBuilder(command).directory(dir).redirectErrorStream(true)
+                .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
+            assertTrue(process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS), "$name timed out")
+            assertEquals(0, process.exitValue(), process.inputStream.bufferedReader().readText())
+            val zip = zip(server.put("/$name", File(dir, name).readBytes()))
+            zip.open()
+            for (file in manifest.files) {
+                val out = ByteArrayOutputStream()
+                assertEquals(file.sha256, zip.read(zip.entries.getValue(manifest.prefix + file.path), out, file.sha256), "$name: ${file.path}")
+            }
+        }
     }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
