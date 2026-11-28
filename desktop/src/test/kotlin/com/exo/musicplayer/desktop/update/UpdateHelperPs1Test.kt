@@ -19,7 +19,8 @@ import kotlin.test.fail
 /**
  * apply-update.ps1 for real, with Windows PowerShell, against a fake install
  * in a temp folder with a `.cmd` launcher. Windows only: the repository's
- * Windows CI runs it. (The UAC path, run-elevated, can't be driven by a test.)
+ * Windows CI runs it. (The UAC prompt itself can't be driven by a test; the
+ * elevated part can, run straight from its encoded command as this user.)
  */
 class UpdateHelperPs1Test {
     private lateinit var dir: File
@@ -62,7 +63,7 @@ class UpdateHelperPs1Test {
         launcher = "Lucense.cmd",
         windows = true,
         elevation = Elevation.None,
-        script = UpdateApplier.writeScript(staging, windows = true)
+        script = UpdateApplier.writeScript(staging)
     )
 
     private fun run(command: List<String>): Int {
@@ -125,5 +126,27 @@ class UpdateHelperPs1Test {
         assertEquals(before, UpdateTestKit.snapshot(install))
         assertNull(UpdateApplier.readResult(result))
         assertFalse(log.exists())
+    }
+
+    @Test
+    fun `the elevated part runs from its encoded command and writes only into the install`() {
+        val req = request().copy(elevation = Elevation.RunAs)
+        val private = File(install, ".lucense-update")
+        val encoded = UpdateApplier.elevatedEncoded(req)
+        val command = listOf("powershell.exe") + UpdateApplier.POWERSHELL_OPTIONS + listOf("-EncodedCommand", encoded)
+        assertTrue(command.joinToString(" ").length < UpdateApplier.MAX_WINDOWS_COMMAND_LINE)
+        File(staging, UpdateApplier.PS1).delete()
+        assertEquals(0, run(command), private.listFiles().orEmpty().joinToString("\n") { it.name })
+        val installed = UpdateTestKit.snapshot(install).filterKeys { !it.startsWith(".lucense-update/") }
+        assertEquals(UpdateTestKit.snapshot(next), installed, File(private, "apply-swap.log").takeIf { it.isFile }?.readText())
+        assertEquals("ready ${req.token}", File(private, "apply.state").readText().trim())
+        assertEquals(ApplyResult(true, "1.1.0", null), UpdateApplier.readResult(File(private, "result.json")))
+        assertFalse(File(private, "backup").exists(), "the backup inside the install goes once the update is in")
+        // Nothing was written to the user's folder, and the app is left to the elevation step to start.
+        assertFalse(result.exists())
+        assertFalse(File(staging, UpdateApplier.STATE).exists())
+        assertFalse(File(staging, "backup").exists())
+        assertFalse(File(staging, UpdateApplier.PS1).exists())
+        assertEquals(emptyList(), launches())
     }
 }

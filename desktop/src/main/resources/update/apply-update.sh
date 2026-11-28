@@ -2,18 +2,31 @@
 # Lucense's update helper (Linux).
 #
 # The running app can't replace its own jars, so it stages the new files,
-# writes this script and a plan next to them, starts the script and exits.
-# This waits for the app to be gone, backs up every file it is about to
-# replace or delete, puts the new files in place, checks every one of them
-# against the SHA-256 in the plan, and starts Lucense again. If anything at
-# all goes wrong it puts every old file back from the backup, so the install
-# is either all old or all new, never half of each.
+# writes a plan next to them, starts this script and exits. This waits for
+# the app to be gone, backs up every file it is about to replace or delete,
+# puts the new files in place, checks every one of them against the SHA-256
+# in the plan, and starts Lucense again. If anything at all goes wrong it puts
+# every old file back from the backup, so the install is either all old or
+# all new, never half of each.
 #
-#   apply-update.sh MODE PID ROOT STAGING VERSION PLAN RESULT LAUNCHER [ELEVATOR] [UID] [GID]
+# Where this code comes from matters. The staging folder belongs to the user,
+# so anything running as the user can change a file there at any moment; if
+# root ran a copy of this script from it, replacing that copy while the
+# password prompt is open would hand root to whoever replaced it. So this is
+# never run from a file: the app reads it out of its own jar (in the install,
+# which only root can change) and passes the text itself as the argument of
+# `sh -c`, both for the user's part and inside the pkexec command it builds
+# (UpdateApplier.pkexecCommand). That is also why this never re-runs itself
+# through $0: inside `sh -c` there is no file behind it.
+#
+#   sh -c "<this text>" apply-update MODE PID ROOT STAGING VERSION PLAN RESULT LAUNCHER [...]
 #
 #   MODE      run           do the swap as this user, then start Lucense
-#             run-elevated  do the swap through ELEVATOR (pkexec), then start Lucense as this user
-#             swap          (under pkexec) the swap only; UID/GID get the files it made back
+#             run-elevated  run the elevated command that follows LAUNCHER, exactly as
+#                           the app built it (pkexec /bin/sh -c "<this text>" apply-update
+#                           swap ...), then start Lucense as this user
+#             swap          (under pkexec) the swap only, followed by: - UID GID, the user
+#                           it acts for in the user's folders
 #   PID       the app's process id, waited for
 #   ROOT      the install root (holds bin/Lucense)
 #   STAGING   the staging folder (holds files/, gets backup/)
@@ -24,6 +37,15 @@
 #
 # File names are only ever read from the plan into variables and used quoted,
 # never pasted into a command line, so a name can't turn into a command.
+#
+# What root still takes on trust: the plan and the staged files come from the
+# user's folder, so whoever can write there can change which files an update
+# the user approved puts into the install (any path under ROOT, any content,
+# with hashes to match, since the hashes are in that same plan). Root never
+# leaves ROOT, never follows a link, and reads and writes the user's folders
+# only as the user, but inside ROOT it installs what the plan says. Closing
+# that needs a release manifest root can check by itself (a signature, or a
+# copy only root can write); until then this is the known remaining risk.
 set -eu
 umask 022
 
@@ -101,6 +123,11 @@ AS_ROOT=no
 if [ "$MODE" = swap ] && [ "$(id -u)" = 0 ]; then
     AS_ROOT=yes
     command -v setpriv >/dev/null 2>&1 || refuse "setpriv is missing"
+    # Root acts in the user's folders for the user who answered the prompt
+    # (pkexec says who that was) and for nobody else; and never for root
+    # itself, which would turn every as_user below back into root.
+    [ "${PKEXEC_UID:-}" = "$OWNER_UID" ] || refuse "the owner is not the user who asked"
+    [ "$OWNER_UID" != 0 ] || refuse "the owner is root"
 fi
 
 as_user() {
@@ -111,11 +138,38 @@ as_user() {
     fi
 }
 
+# Whether the user could change what is in folder $1 (make, remove or rename
+# entries in it). Only asked as root: as the user, the user can change it all.
+user_can_change() {
+    [ "$AS_ROOT" = yes ] && as_user test -w "$1"
+}
+
+if [ "$AS_ROOT" = yes ]; then
+    # Root works on the real folder, not through any link on the way to it,
+    # and only on an install the user can't rearrange: a folder the user can
+    # write, on the path to the install or in it, could have a link swapped
+    # in between root's checks and root's writes, and root would follow it
+    # out of the install. Such an install doesn't need root anyway.
+    ROOT=$(realpath -e -- "$ROOT") || refuse "no install root"
+    folder=$ROOT
+    while :; do
+        if user_can_change "$folder"; then refuse "the user can change $folder"; fi
+        [ "$folder" != / ] || break
+        folder=$(dirname -- "$folder")
+    done
+fi
+
 FILES="$STAGING/files"
 STATE="$STAGING/apply.state"
 if [ "$AS_ROOT" = yes ]; then
     # Made fresh by root, with a name nobody can guess, readable by root alone.
     PRIVATE=$(mktemp -d /var/tmp/lucense-update.XXXXXX) || refuse "no private folder"
+    # mktemp makes the folder new (it never reuses a name someone else made in
+    # /var/tmp), mode 700; checked anyway, since the backup of the install and
+    # root's copy of the plan live there.
+    if [ -L "$PRIVATE" ] || [ "$(stat -c '%u %a' -- "$PRIVATE")" != "0 700" ]; then
+        refuse "the private folder isn't private"
+    fi
     BACKUP="$PRIVATE/backup"
     WORK="$PRIVATE/work"
 else
@@ -177,6 +231,23 @@ wait_for_app() {
     return 0
 }
 
+# The folders between ROOT and the install path $1: never a link (root would
+# follow it out of the install), never something other than a folder, and as
+# root never one the user can change (see user_can_change). The file itself
+# is checked by the caller.
+check_install_path() {
+    rest=$1
+    here=$ROOT
+    while :; do
+        case $rest in */*) part=${rest%%/*}; rest=${rest#*/} ;; *) break ;; esac
+        here="$here/$part"
+        if [ -L "$here" ]; then fail "$1 in the install goes through a link."; fi
+        [ -e "$here" ] || break
+        [ -d "$here" ] || fail "$1 in the install is under something that isn't a folder."
+        if user_can_change "$here"; then fail "$1 is in a folder of the install that the user can change; use the installer."; fi
+    done
+}
+
 # Makes the folders above $1 that are missing, noting each, so a rollback can
 # take away exactly the folders this made and no others.
 make_parents() {
@@ -213,12 +284,14 @@ swap_files() {
             fi
             target=$first
         fi
+        check_install_path "$target"
         dest="$ROOT/$target"
         if [ -e "$dest" ] || [ -L "$dest" ]; then
             # Only plain files are replaced: never a folder, never through a link.
             if [ ! -f "$dest" ] || [ -L "$dest" ]; then fail "$target in the install isn't a plain file."; fi
             mkdir -p -- "$(dirname -- "$BACKUP/$target")" || fail "Couldn't make the backup folder."
-            cp -p -- "$dest" "$BACKUP/$target" || fail "Couldn't back up $target."
+            # -P: copy the file itself, never what a link would point to.
+            cp -P -p -- "$dest" "$BACKUP/$target" || fail "Couldn't back up $target."
             printf '%s\n' "$target" >> "$WORK/backed-up.list"
         elif [ "$target" = "$first" ]; then
             printf '%s\n' "$target" >> "$WORK/created.list"
@@ -272,7 +345,7 @@ roll_back() {
         if grep -qxF -- "$path" "$WORK/backed-up.list"; then
             # Never got as far as changing this one: nothing to put back.
             if cmp -s -- "$BACKUP/$path" "$ROOT/$path"; then continue; fi
-            if cp -p -- "$BACKUP/$path" "$ROOT/$path.lucense-new" && mv -f -- "$ROOT/$path.lucense-new" "$ROOT/$path"; then
+            if cp -P -p -- "$BACKUP/$path" "$ROOT/$path.lucense-new" && mv -f -- "$ROOT/$path.lucense-new" "$ROOT/$path"; then
                 :
             else
                 problems=1
@@ -365,12 +438,14 @@ case $MODE in
         apply_update
         ;;
     run-elevated)
+        # The command after LAUNCHER is the app's, word for word (see the top):
         # pkexec shows the system's password prompt and runs only the swap as
         # administrator; Lucense itself is started afterwards from here, as the
         # user, never as root.
         rm -f -- "$STATE"
+        shift 8
         set +e
-        "$ELEVATOR" /bin/sh "$0" swap "$APP_PID" "$ROOT" "$STAGING" "$VERSION" "$PLAN" "$RESULT" "$LAUNCHER" - "$(id -u)" "$(id -g)" </dev/null
+        "$@" </dev/null
         status=$?
         set -e
         if [ "$(cat "$STATE" 2>/dev/null || true)" != ready ]; then

@@ -64,8 +64,7 @@ class UpdateHelperShTest {
         result = result,
         launcher = "bin/Lucense",
         windows = false,
-        elevation = elevation,
-        script = UpdateApplier.writeScript(staging, windows = false)
+        elevation = elevation
     )
 
     private fun run(command: List<String>, env: Map<String, String> = emptyMap()): Int {
@@ -170,23 +169,39 @@ class UpdateHelperShTest {
     fun `wrong arguments are refused without touching anything`() {
         val req = request()
         val args = UpdateApplier.command(req).toMutableList()
-        // /bin/sh, the script, then MODE PID ROOT ...
-        args[4] = "relative/root"
+        // /bin/sh -c <text> apply-update, then MODE PID ROOT ...
+        assertEquals(listOf("/bin/sh", "-c"), args.take(2))
+        args[6] = "relative/root"
         assertEquals(2, run(args))
-        args[4] = install.absolutePath
-        args[2] = "explode"
+        args[6] = "${install.absolutePath}/../install"
         assertEquals(2, run(args))
-        args[2] = "run"
-        args[3] = "12; rm -rf /"
+        args[6] = install.absolutePath
+        args[4] = "explode"
+        assertEquals(2, run(args))
+        args[4] = "run"
+        args[5] = "12; rm -rf /"
         assertEquals(2, run(args))
         assertEquals(before, UpdateTestKit.snapshot(install))
         assertNull(UpdateApplier.readResult(result))
         assertFalse(log.exists(), "nothing was started")
     }
 
-    /** A stand-in for pkexec that records what it was asked to run and runs it as this same user. */
-    private fun fakePkexec(body: String): File =
-        UpdateTestKit.write(File(dir, "bin/pkexec"), "#!/bin/sh\nprintf '%s\\n' \"\$@\" > '${File(dir, "pkexec-argv").absolutePath}'\n$body\n".toByteArray(), exec = true)
+    /**
+     * A stand-in for pkexec that records what it was asked to run (each
+     * argument ended by a NUL, since the helper's text has newlines in it),
+     * runs [before], then [body]; "exec \"$@\"" runs the command the way the
+     * real one does after the prompt, only as this same user. PKEXEC_UID is
+     * set as pkexec sets it.
+     */
+    private fun fakePkexec(body: String, before: String = ""): File =
+        UpdateTestKit.write(
+            File(dir, "bin/pkexec"),
+            ("#!/bin/sh\nprintf '%s\\0' \"\$@\" > '${File(dir, "pkexec-argv").absolutePath}'\n$before\n" +
+                "PKEXEC_UID=\$(id -u)\nexport PKEXEC_UID\n$body\n").toByteArray(),
+            exec = true
+        )
+
+    private fun pkexecArgv(): List<String> = File(dir, "pkexec-argv").readText().split('\u0000').dropLast(1)
 
     private fun id(flag: String): Long {
         val p = ProcessBuilder("id", flag).redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
@@ -200,10 +215,52 @@ class UpdateHelperShTest {
         val req = request(elevation = Elevation.Pkexec(pkexec))
         assertEquals(0, run(UpdateApplier.command(req)), helperLog())
         val expected = UpdateApplier.pkexecCommand(req, id("-u"), id("-g")).drop(1)
-        assertEquals(expected, File(dir, "pkexec-argv").readLines())
+        val argv = pkexecArgv()
+        assertEquals(expected, argv)
+        // What root runs is /bin/sh with the helper's text, from the app's jar, as the
+        // argument of -c; the only files of the user's it is told about are the plan and
+        // the result, as data.
+        assertEquals(listOf("/bin/sh", "-c", UpdateApplier.scriptText(UpdateApplier.SH), "apply-update", "swap"), argv.take(5))
+        assertFalse(File("/bin/sh").canWrite())
+        val userFiles = argv.filter { it.startsWith(dir.absolutePath) && File(it).isFile }
+        assertEquals(listOf(req.plan.absolutePath, result.absolutePath), userFiles)
+        assertFalse(staging.walkTopDown().any { it.name.endsWith(".sh") }, "no script is written to the staging folder")
         assertEquals(UpdateTestKit.snapshot(next), UpdateTestKit.snapshot(install), helperLog())
         assertEquals(ApplyResult(true, "1.1.0", null), UpdateApplier.readResult(result))
         assertEquals(listOf("started 1.1.0 "), launches())
+    }
+
+    @Test
+    fun `a helper planted in the staging folder while the prompt is open is never run`() {
+        // The attack this guards against: while the password prompt is open, another
+        // program of the user's writes its own code where a helper script could be.
+        val marker = File(dir, "tampered")
+        val evil = "#!/bin/sh\ntouch \"${marker.absolutePath}\"\nexit 0\n"
+        val plant = listOf(UpdateApplier.SH, "apply-update", "${UpdateApplier.SH}.tmp").joinToString("\n") { name ->
+            "printf '%s' '$evil' > '${File(staging, name).absolutePath}'; chmod +x '${File(staging, name).absolutePath}'"
+        }
+        val req = request(elevation = Elevation.Pkexec(fakePkexec("exec \"\$@\"", before = plant)))
+        assertEquals(0, run(UpdateApplier.command(req)), helperLog())
+        assertTrue(File(staging, UpdateApplier.SH).isFile, "the planted file is there")
+        assertFalse(marker.exists(), "and its code never ran")
+        assertEquals(UpdateTestKit.snapshot(next), UpdateTestKit.snapshot(install), helperLog())
+        assertEquals(ApplyResult(true, "1.1.0", null), UpdateApplier.readResult(result))
+        assertEquals(listOf("started 1.1.0 "), launches())
+    }
+
+    @Test
+    fun `a link planted inside the install is not followed out of it`() {
+        // lib/app/resources/new-folder doesn't exist yet: the update would make it.
+        // A link in its place must not take the update's files somewhere else.
+        val outside = File(dir, "outside").apply { mkdirs() }
+        java.nio.file.Files.createSymbolicLink(File(install, "lib/app/resources/new-folder").toPath(), outside.toPath())
+        val planted = UpdateTestKit.snapshot(install)
+        assertEquals(0, run(UpdateApplier.command(request())))
+        assertEquals(emptyList(), outside.list()!!.toList(), "nothing written through the link")
+        assertEquals(planted, UpdateTestKit.snapshot(install), helperLog())
+        val outcome = assertNotNull(UpdateApplier.readResult(result))
+        assertFalse(outcome.ok)
+        assertTrue(outcome.error!!.contains("goes through a link"), outcome.error)
     }
 
     @Test
