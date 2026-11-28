@@ -13,7 +13,7 @@ ytdlp = "0.18.1"
 desugarJdkLibs = "2.1.2"
 # MPRIS on Linux: the desktop's media keys and media controls.
 dbusJava = "5.2.2"
-composeMultiplatform = "1.7.3"
+composeMultiplatform = "1.12.2"
 # Backdrop blur for the Windows glass look; 1.2.2 is the one built on Compose 1.7.3.
 haze = "1.2.2"
 sqliteJdbc = "3.47.1.0"
