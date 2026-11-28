@@ -17,5 +17,9 @@ data class DownloadEntry(
     /** The song it was asked for by name, when it was: kept so a retry asks the same way. */
     val song: YouTubeLinkFinder.Wanted? = null,
     /** A playlist's songs that weren't downloaded, for "Retry the missed". */
-    var missed: Int = 0
+    var missed: Int = 0,
+    /** How the cover art went ("Cover added", "No cover found"); null until known, or when none was looked for. */
+    var cover: String? = null,
+    /** What the song was found by, so a retry looks for its cover the same way. */
+    val hint: CoverHint? = null
 )

@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import com.exo.musicplayer.data.net.Http
 import com.exo.musicplayer.desktop.library.AudioKind
 import com.exo.musicplayer.desktop.library.DesktopTrack
 import kotlinx.coroutines.Dispatchers
@@ -199,6 +200,16 @@ object Covers {
             sidecar(track.file) != null
     }
 
+    /**
+     * Whether the song carries a cover of its own - inside the file, or fetched
+     * for it earlier. Unlike [hasLocalArt] a picture lying in the same folder
+     * (a `cover.jpg` in a flat download folder belongs to no song in
+     * particular) doesn't count: a freshly downloaded song is judged on what it
+     * has itself.
+     */
+    fun hasOwnArt(track: DesktopTrack): Boolean =
+        downloadedFile(track).exists() || embedded(track.file) != null
+
     /** The row cover: from memory, else its few kilobytes on disk, else out of the song and onto disk. */
     private fun loadSmall(track: DesktopTrack): ImageBitmap? {
         cached(track, SMALL_EDGE)?.let { return it }
@@ -327,12 +338,16 @@ object Covers {
             setRequestProperty("User-Agent", "Lucense/1.0 (desktop)")
         }
         try {
-            if (connection.responseCode !in 200..299) return null
+            val code = connection.responseCode
+            // Told apart from "there is no such picture", for the lookups that
+            // must not call a song coverless because the network was down.
+            if (code >= 500 || code == 429) Http.noteTrouble()
+            if (code !in 200..299) return null
             connection.inputStream.use { it.readBytes() }.takeIf { it.size > 512 }
         } finally {
             connection.disconnect()
         }
-    }.getOrNull()
+    }.onFailure { if (it is java.io.IOException) Http.noteTrouble() }.getOrNull()
 
     private fun hash(value: String): String =
         MessageDigest.getInstance("SHA-1").digest(value.toByteArray())

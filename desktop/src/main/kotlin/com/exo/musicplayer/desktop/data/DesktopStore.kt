@@ -411,6 +411,15 @@ class DesktopStore(databaseFile: File) {
         }
     }
 
+    /** Whether one song carries [column]'s mark: [markedPaths] for a single path, without reading the lot. */
+    fun isMarked(path: String, column: String): Boolean {
+        require(column in MARK_COLUMNS)
+        return connection.prepareStatement("SELECT 1 FROM marks WHERE path = ? AND $column IS NOT NULL").use {
+            it.setString(1, path)
+            it.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
     fun markedPaths(column: String): Set<String> {
         require(column in MARK_COLUMNS)
         return buildSet {
