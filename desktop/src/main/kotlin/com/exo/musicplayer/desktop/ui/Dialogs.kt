@@ -76,6 +76,8 @@ fun ScrimDialog(
     onDismiss: () -> Unit,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
+    // So the mouse's Back button can close it, as Esc closes it.
+    Modals.Register(onDismiss)
     Box(
         Modifier
             .fillMaxSize()

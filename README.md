@@ -341,6 +341,7 @@ file said before anything touched it.
   | Ctrl + V | paste a link to download it, make a playlist from it or identify the song in it |
   | Ctrl + F | the page's search box, from anywhere |
   | Ctrl + A · Esc | select everything in view · clear the selection, or back from an album's page; in a text box, Esc leaves it |
+  | Mouse Back / Forward | go back / forward between pages (or previous / next song, Settings → Playback) |
 
   Your keyboard's or headset's **media keys** work even while Lucense is in the
   background.

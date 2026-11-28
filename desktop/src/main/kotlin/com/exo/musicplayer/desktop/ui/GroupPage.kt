@@ -79,9 +79,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.PointerButton
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -154,7 +151,7 @@ class GroupView(
  * banner in the cover's colour with the cover, the name and what it holds;
  * a big play button; and every song in order, the one playing picked out.
  *
- * Back is the arrow at the top, Escape, or the mouse's back button. Once the
+ * Back is the arrow at the top, Escape, or the mouse's back button (taken by the window). Once the
  * banner has scrolled away, the bar along the top keeps the name and a play
  * button in reach.
  */
@@ -246,11 +243,8 @@ fun GroupPage(view: GroupView, actions: GroupActions) {
         }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .onPointerEvent(PointerEventType.Press) { if (it.button == PointerButton.Back) actions.back() }
-    ) {
+    // The mouse's Back button is taken for the whole window (MouseButtons.kt), which goes back a place.
+    Box(Modifier.fillMaxSize()) {
         ScrollingList(list, Modifier.fillMaxSize()) { fill ->
             LazyColumn(state = list, modifier = fill) {
                 item(key = "hero") {

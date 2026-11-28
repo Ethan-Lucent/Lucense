@@ -271,6 +271,11 @@ class DesktopSettings(
         get() = prefs.getBoolean(KEY_HOVER_NOTES, true)
         set(value) = prefs.putBoolean(KEY_HOVER_NOTES, value)
 
+    /** A MouseButtonsMode name: what the mouse's side buttons do in the main window. */
+    var mouseButtons: String
+        get() = prefs.get(KEY_MOUSE_BUTTONS, "NAVIGATE")
+        set(value) = prefs.put(KEY_MOUSE_BUTTONS, value)
+
     /**
      * Whether the extra controls are shown (Settings > Appearance). Always
      * stored by the time anything reads it - see [resolveAdvanced].
@@ -489,6 +494,7 @@ class DesktopSettings(
         const val KEY_DISCORD_COVER = "discord_cover"
         const val KEY_NOTIFY_SONGS = "notify_songs"
         const val KEY_HOVER_NOTES = "hover_notes"
+        const val KEY_MOUSE_BUTTONS = "mouse_buttons"
         const val KEY_ADVANCED_MODE = "advanced_mode"
         const val KEY_RAIL_MORE = "rail_more_open"
         const val KEY_TIPS_SEEN = "tips_seen"

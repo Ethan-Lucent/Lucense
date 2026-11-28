@@ -124,6 +124,7 @@ internal val settingsIndex: List<SettingEntry> = buildList {
     add(SettingEntry("Fade out on the sleep timer", "gentle ending", playback))
     add(SettingEntry("Crossfade", "overlap one song into the next", playback))
     add(SettingEntry("Media keys", "play pause next previous on the keyboard", playback))
+    add(SettingEntry("Mouse side buttons", "back forward thumb buttons, previous next song, page history", playback))
     add(SettingEntry("Keep playing in the tray when the window is closed", "background system tray", playback))
     add(SettingEntry("Show the mini player while it's in the tray", "small window on top", playback))
     if (Platform.isWindows) {
@@ -758,6 +759,17 @@ private fun PlaybackOptionsSettings(controller: DesktopController) {
                     "media controls with the song playing and its cover."
             }
         ) { controller.mediaKeysEnabled = it }
+        Spacer(Modifier.height(18.dp))
+        Text("Mouse side buttons", style = MaterialTheme.typography.titleMedium, color = Palette.Text)
+        Spacer(Modifier.height(8.dp))
+        Noted(null, MOUSE_BUTTONS_NOTE) {
+            SegmentedRow(
+                options = MouseButtonsMode.entries,
+                selected = controller.mouseButtons,
+                label = { it.label },
+                onSelect = { controller.mouseButtons = it }
+            )
+        }
         Spacer(Modifier.height(14.dp))
         CheckRow(
             label = "Keep playing in the tray when the window is closed",

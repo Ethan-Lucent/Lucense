@@ -63,10 +63,17 @@ val KEY_GUIDE: List<KeyGroup> = listOf(
         )
     ),
     KeyGroup(
+        "Mouse",
+        listOf(
+            "Back  Forward" to "The mouse's side buttons: go back or forward between pages, or previous or next song (Settings > Playback)"
+        )
+    ),
+    KeyGroup(
         "Mini player and lyrics windows",
         listOf(
             "Space  \u2190 \u2192  \u2191 \u2193" to "As in the main window",
             "M  S  R  L" to "As in the main window",
+            "Mouse Back  Forward" to "Previous or next song",
             "Esc" to "Close full-screen lyrics"
         )
     )
