@@ -181,7 +181,7 @@ class UiPolishTest {
             val left: @androidx.compose.runtime.Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
                 BarNowPlaying(
                     narrow, { Box(Modifier.size(46.dp).background(Palette.Accent)) }, title,
-                    androidx.compose.ui.text.AnnotatedString("Some Artist"), Modifier, false, {}
+                    com.exo.musicplayer.desktop.ui.NameLinks.plain("Some Artist"), Modifier, false, {}
                 )
             }
             val centre: @androidx.compose.runtime.Composable () -> Unit = {

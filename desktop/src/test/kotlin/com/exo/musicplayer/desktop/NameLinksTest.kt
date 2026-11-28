@@ -1,6 +1,19 @@
 package com.exo.musicplayer.desktop
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import com.exo.musicplayer.desktop.ui.LinkedText
+import com.exo.musicplayer.desktop.ui.artistLinks
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.click
@@ -95,6 +108,43 @@ class NameLinksTest {
         clickOn(songs[1], "An Album", "An Album")
         assertEquals(album.key, opened)
         assertNull(played)
+    }
+
+    /**
+     * A credit cut short by a narrow column, resized again and again with the
+     * mouse going over it: with Compose's own links that was a
+     * NullPointerException mid-layout on Windows ("Unknown error"), then
+     * "layout state is not idle" every frame and a half-white window. A name
+     * in the cut-off part is not there to click.
+     */
+    @Test
+    fun namesCutOffByANarrowColumnNeverBreakTheLayout() = runComposeUiTest {
+        val credit = song(4, "First Artist, Second Artist, Third Artist, Fourth Artist & Fifth Artist", null)
+        var opened: String? = null
+        var width by mutableStateOf(60.dp)
+        setContent {
+            LucenseDesktopTheme {
+                Box(Modifier.width(width).testTag("credit")) {
+                    LinkedText(artistLinks(credit) { opened = it }, TextStyle.Default, Color.White)
+                }
+            }
+        }
+        for (step in 0 until 40) {
+            width = (40 + (step * 37) % 400).dp
+            waitForIdle()
+            onNode(hasTestTag("credit")).performMouseInput { moveTo(Offset((step * 13 % 60).toFloat(), 6f)) }
+        }
+        width = 90.dp
+        waitForIdle()
+        // Far right of the narrow column: the ellipsis, with the fourth and fifth artists behind it.
+        onNode(hasTestTag("credit")).performMouseInput { click(Offset(88f, 6f)) }
+        waitForIdle()
+        assertTrue(opened == null || opened == "artist:first artist" || opened == "artist:second artist", "only a name that shows opens: $opened")
+        // The first name is drawn, so it still opens.
+        opened = null
+        onNode(hasTestTag("credit")).performMouseInput { click(Offset(4f, 6f)) }
+        waitForIdle()
+        assertEquals("artist:first artist", opened)
     }
 
     private fun actions(
