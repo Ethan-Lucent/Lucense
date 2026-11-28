@@ -232,7 +232,13 @@ class ZipOverHttp(private val remote: UpdateHttp.Ranged) {
             if (written > entry.size) throw UpdateException("${entry.name} came out larger than the zip says.")
             crc.update(bytes, 0, count)
             sha.update(bytes, 0, count)
-            out.write(bytes, 0, count)
+            // A disk that won't take the bytes is not a network hiccup: no retry,
+            // which would also feed the inflater the same bytes twice.
+            try {
+                out.write(bytes, 0, count)
+            } catch (e: java.io.IOException) {
+                throw UpdateException("Couldn't write the update to disk: ${e.message}")
+            }
             onBytes(count.toLong())
         }
 

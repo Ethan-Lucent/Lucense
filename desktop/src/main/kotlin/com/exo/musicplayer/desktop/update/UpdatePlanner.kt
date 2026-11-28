@@ -62,7 +62,9 @@ object UpdatePlanner {
                 hashed += read
                 onProgress(hashed, total)
             }
-            if (sha == entry.sha256) matching += entry.path
+            // The right bytes without the executable bit still need putting right.
+            val runnable = layout.windows || !entry.exec || layout.file(entry.path).canExecute()
+            if (sha == entry.sha256 && runnable) matching += entry.path
         }
         val toFetch = manifest.files.filter { it.path !in matching }
         val listed = manifest.files.mapTo(HashSet()) { it.path.lowercase() }

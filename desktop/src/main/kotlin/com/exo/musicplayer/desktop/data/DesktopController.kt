@@ -62,6 +62,9 @@ import com.exo.musicplayer.data.playlist.ImportResult
 import com.exo.musicplayer.data.playlist.PlaylistEntry
 import com.exo.musicplayer.data.playlist.PlaylistFile
 import com.exo.musicplayer.data.update.Updates
+import com.exo.musicplayer.desktop.update.InstallLayout
+import com.exo.musicplayer.desktop.update.UpdateController
+import com.exo.musicplayer.desktop.update.UpdateState
 import com.exo.musicplayer.data.weather.Affinity
 import com.exo.musicplayer.data.weather.GeoPlace
 import com.exo.musicplayer.data.weather.OpenMeteo
@@ -1879,30 +1882,40 @@ class DesktopController(parent: CoroutineScope) {
 
     // ---- Updates --------------------------------------------------------------
 
-    var update by mutableStateOf<Updates.Release?>(null)
+    /**
+     * The in-app updater: finds a newer release, downloads only the files that
+     * changed (when the user asks), and hands over to a helper that swaps them
+     * in and starts Lucense again. A copy it can't update in place (a run from
+     * Gradle, a layout it doesn't recognise) keeps the release-page link.
+     */
+    val updater = UpdateController(
+        scope = scope,
+        currentVersion = AppVersion.name,
+        layout = InstallLayout.detect(),
+        updatesRoot = File(AppDirs.root, "update"),
+        findProgram = { Platform.onPath(it) },
+        exitApp = { exitRequested = true }
+    )
+
+    val updateState: UpdateState get() = updater.state
+
+    /** Set once the update helper is running: the window quits on it (Main.kt). */
+    var exitRequested by mutableStateOf(false)
         private set
-    var updateNote by mutableStateOf<String?>(null)
-        private set
-    var updateChecking by mutableStateOf(false)
-        private set
+
+    val update: Updates.Release? get() = updater.release?.legacy
+    val updateNote: String? get() = updater.note
+    val updateChecking: Boolean get() = updater.state is UpdateState.Checking
 
     /** Whether what was found is actually newer than what is running. */
     val updateReady: Boolean
         get() = update?.let { Updates.isNewer(it.version, AppVersion.name) } == true
 
     fun checkForUpdate(announce: Boolean = false) {
-        if (updateChecking) return
-        updateChecking = true
-        scope.launch {
-            val newest = io { Updates.newest() }
-            updateChecking = false
-            update = newest
-            updateNote = when {
-                newest == null -> "Could not reach GitHub."
-                Updates.isNewer(newest.version, AppVersion.name) -> "Version ${newest.version} is out."
-                else -> "Up to date."
+        updater.check { newest ->
+            if (announce && newest != null && Updates.isNewer(newest.version, AppVersion.name)) {
+                dropNote = "Lucense ${newest.version} is out — see Settings."
             }
-            if (announce && updateReady) dropNote = "Lucense ${newest?.version} is out — see Settings."
         }
     }
 
@@ -5014,6 +5027,8 @@ class DesktopController(parent: CoroutineScope) {
         refreshFileTypes()
         applyDiscord()
         refreshRecentlyPlayed()
+        // What the last update came to, said once; then the usual look for a newer one.
+        updater.startup()?.let { dropNote = it }
         checkForUpdate(announce = true)
         refreshBackups()
         watcher.watch(roots())
