@@ -19,7 +19,16 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 
 /** What an update would download. */
-data class UpdateSummary(val files: Int, val bytes: Long, val stale: Int)
+data class UpdateSummary(
+    val files: Int,
+    /** The files as installed: what the free-space check needs. */
+    val bytes: Long,
+    val stale: Int,
+    /** What is actually downloaded (the zip's compressed sizes); [bytes] when the zip couldn't be read. */
+    val transferBytes: Long = bytes,
+    /** False when [transferBytes] is only the installed total, an upper bound: shown as "up to". */
+    val transferExact: Boolean = true
+)
 
 /** Where the in-app update stands; Compose state on [UpdateController.state]. */
 sealed interface UpdateState {
@@ -94,9 +103,23 @@ class UpdateController(
     var note by mutableStateOf<String?>(null)
         private set
 
+    /** Whether installing needs administrator rights (a system install): the notice says a password will be asked. */
+    var needsAdmin by mutableStateOf(false)
+        private set
+
+    /** Whether the last update's result (from [startup]) was a success; null when there was none. */
+    var lastResultOk by mutableStateOf<Boolean?>(null)
+        private set
+
     private val stager = UpdateStager(updatesRoot)
     private var plan: UpdatePlan? = null
     private var job: Job? = null
+
+    /** The compressed size of each file in the plan's toFetch, or null when the zip couldn't be read at check time. */
+    private var transfer: List<Long>? = null
+
+    /** Set by [updateNow]: once the download is staged, go straight on to applying. */
+    private var applyWhenReady = false
 
     val resultFile: File get() = File(updatesRoot, RESULT)
 
@@ -164,6 +187,7 @@ class UpdateController(
             return
         }
         state = UpdateState.Available(found, null, true, null)
+        transfer = null
         try {
             val made = withContext(Dispatchers.IO) {
                 val text = http.getText(manifestAsset.url, UpdateManifest.MAX_BYTES)
@@ -183,12 +207,34 @@ class UpdateController(
                 cleanStaging(keep = made.version)
                 stager.isComplete(made)
             }
+            needsAdmin = withContext(Dispatchers.IO) { UpdateApplier.elevation(layout, made, findProgram) !is Elevation.None }
+            if (!complete) transfer = compressedSizesOf(found, made)
             state = if (complete) UpdateState.Ready(made.version) else UpdateState.Available(found, summaryOf(made), true, null)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             plan = null
             state = UpdateState.Available(found, null, false, e.message ?: "The release's update list couldn't be read.")
+        }
+    }
+
+    /**
+     * Reads the zip's central directory (a couple of small ranged requests) for
+     * the size that will really be downloaded; null if it can't be read, and
+     * the offer then says "up to" the installed total.
+     */
+    private suspend fun compressedSizesOf(found: UpdateRelease, made: UpdatePlan): List<Long>? {
+        val asset = found.asset(made.manifest.zip) ?: return null
+        return try {
+            withContext(Dispatchers.IO) {
+                val zip = ZipOverHttp(http.Ranged(asset.url))
+                zip.open()
+                UpdateTransfer.compressedSizes(made, zip)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -210,7 +256,10 @@ class UpdateController(
         val layout = layout ?: return
         if (!available.canDelta) return
         val zipAsset = available.release.asset(made.manifest.zip) ?: return
-        state = UpdateState.Downloading(made.version, 0, made.toFetch.size, 0, made.bytes)
+        // Progress is told in downloaded (compressed) bytes, as the size offered was.
+        val sizes = transfer
+        val shownTotal = sizes?.sum() ?: made.bytes
+        state = UpdateState.Downloading(made.version, 0, made.toFetch.size, 0, shownTotal)
         job = scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -222,18 +271,28 @@ class UpdateController(
                         val at = now()
                         if (at - shown >= 100 || p.filesDone == p.filesTotal) {
                             shown = at
-                            state = UpdateState.Downloading(made.version, p.filesDone, p.filesTotal, p.bytesDone, p.bytesTotal)
+                            val shown = if (sizes == null) p.bytesDone else UpdateTransfer.shown(made, sizes, p.bytesDone)
+                            state = UpdateState.Downloading(made.version, p.filesDone, p.filesTotal, shown, shownTotal)
                         }
                     }
                     if (!stager.isComplete(made)) throw UpdateException("The downloaded files didn't check out.")
                 }
                 state = UpdateState.Ready(made.version)
+                // "Update now": the go-ahead covers the restart too.
+                if (applyWhenReady) {
+                    applyWhenReady = false
+                    applyAndRestart()
+                }
             } catch (e: CancellationException) {
+                applyWhenReady = false
                 state = UpdateState.Available(available.release, summaryOf(made), true, null)
                 throw e
             } catch (e: RangesUnsupportedException) {
+                applyWhenReady = false
                 state = UpdateState.Failed(e.message ?: "ranges unsupported", canRetry = false)
             } catch (e: Exception) {
+                // The chain stops at the first failure; what is staged stays.
+                applyWhenReady = false
                 state = UpdateState.Failed(e.message ?: "The download failed.", canRetry = true)
             }
         }
@@ -262,8 +321,45 @@ class UpdateController(
         job = scope.launch {
             val complete = withContext(Dispatchers.IO) { stager.isComplete(made) }
             state = if (complete) UpdateState.Ready(made.version) else UpdateState.Available(found, summaryOf(made), true, null)
-            if (!complete) download()
+            if (!complete) {
+                download()
+            } else if (applyWhenReady) {
+                applyWhenReady = false
+                applyAndRestart()
+            }
         }
+    }
+
+    /**
+     * The one click of the launch notice: download (verified and staged), then
+     * apply and restart without a second "Restart to update". Stops at the
+     * first failure, leaving the staged files and the state for the UI to show;
+     * a dismissed password prompt ends as Ready with "Update cancelled.".
+     */
+    fun updateNow() {
+        when (val current = state) {
+            is UpdateState.Ready -> applyAndRestart()
+            is UpdateState.Available -> {
+                applyWhenReady = true
+                download()
+                if (state !is UpdateState.Downloading) applyWhenReady = false
+            }
+            is UpdateState.Failed -> if (current.canRetry && plan != null) {
+                applyWhenReady = true
+                retry()
+            }
+            else -> Unit
+        }
+    }
+
+    /**
+     * The look-up made as the app starts. With [enabled] off nothing is asked
+     * of the network at all; returns whether it looked.
+     */
+    fun startupCheck(enabled: Boolean, onDone: (UpdateRelease?) -> Unit = {}): Boolean {
+        if (!enabled) return false
+        check(onDone)
+        return true
     }
 
     /**
@@ -341,6 +437,7 @@ class UpdateController(
             resultFile.delete()
         }
         if (message != null) note = message
+        lastResultOk = result?.ok
         cleanStaging(keep = null, onlyOld = true)
         return message
     }
@@ -365,7 +462,10 @@ class UpdateController(
         }
     }
 
-    private fun summaryOf(made: UpdatePlan) = UpdateSummary(made.toFetch.size, made.bytes, made.stale.size)
+    private fun summaryOf(made: UpdatePlan): UpdateSummary {
+        val sizes = transfer
+        return UpdateSummary(made.toFetch.size, made.bytes, made.stale.size, sizes?.sum() ?: made.bytes, sizes != null)
+    }
 
     companion object {
         const val RESULT = "result.json"

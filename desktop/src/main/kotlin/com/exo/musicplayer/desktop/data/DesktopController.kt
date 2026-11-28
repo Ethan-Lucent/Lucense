@@ -64,6 +64,7 @@ import com.exo.musicplayer.data.playlist.PlaylistFile
 import com.exo.musicplayer.data.update.Updates
 import com.exo.musicplayer.desktop.update.InstallLayout
 import com.exo.musicplayer.desktop.update.UpdateController
+import com.exo.musicplayer.desktop.update.UpdateNotice
 import com.exo.musicplayer.desktop.update.UpdateState
 import com.exo.musicplayer.data.weather.Affinity
 import com.exo.musicplayer.data.weather.GeoPlace
@@ -1898,6 +1899,28 @@ class DesktopController(parent: CoroutineScope) {
     )
 
     val updateState: UpdateState get() = updater.state
+
+    private val updateNoticeState = mutableStateOf(settings.updateNotice)
+
+    /**
+     * Whether Lucense looks for a newer version when it starts and offers it
+     * in a card. Off: no look-up at launch (no network traffic) and no card;
+     * "Check now" and the Settings row work as ever.
+     */
+    var updateNotice: Boolean
+        get() = updateNoticeState.value
+        set(value) {
+            updateNoticeState.value = value
+            settings.updateNotice = value
+        }
+
+    /** The launch card: when to show it, and what its buttons do. */
+    val announcer = UpdateNotice(
+        updater = updater,
+        settingOn = { updateNotice },
+        skippedVersion = { settings.updateSkipped },
+        saveSkipped = { settings.updateSkipped = it }
+    )
 
     /** Set once the update helper is running: the window quits on it (Main.kt). */
     var exitRequested by mutableStateOf(false)
@@ -5028,8 +5051,9 @@ class DesktopController(parent: CoroutineScope) {
         applyDiscord()
         refreshRecentlyPlayed()
         // What the last update came to, said once; then the usual look for a newer one.
-        updater.startup()?.let { dropNote = it }
-        checkForUpdate(announce = true)
+        updater.startup()?.let { announcer.showResult(it, updater.lastResultOk != false) }
+        // Setting off: no look-up at all, so nothing goes over the network.
+        announcer.launchLookup()
         refreshBackups()
         watcher.watch(roots())
         rescan()
