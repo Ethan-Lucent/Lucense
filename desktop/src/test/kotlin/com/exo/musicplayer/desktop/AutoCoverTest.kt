@@ -124,11 +124,23 @@ class AutoCoverTest {
         val ytDlp = File("/opt/lucense/lib/app/resources/yt-dlp")
         assumeTrue(ytDlp.canExecute() && ffmpeg.canExecute() && !Platform.isWindows, "needs the bundled yt-dlp and ffmpeg")
         val dir = temp()
+        // Each tool gets no input and a time limit: a stalled one (a network wait inside yt-dlp, a
+        // tool waiting on input) must fail this test in a minute, not hold the whole suite for half an hour.
         fun run(vararg command: String): String {
-            val p = ProcessBuilder(*command).redirectErrorStream(true).start()
-            val out = p.inputStream.bufferedReader().readText()
-            p.waitFor()
-            return out
+            val started = System.nanoTime()
+            val p = ProcessBuilder(*command)
+                .redirectErrorStream(true)
+                .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+                .start()
+            val collected = StringBuffer()
+            val reader = Thread { p.inputStream.bufferedReader().forEachLine { collected.appendLine(it) } }.apply { isDaemon = true; start() }
+            if (!p.waitFor(90, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly()
+                throw AssertionError("${File(command[0]).name} still running after 90 s:\n$collected")
+            }
+            reader.join(2_000)
+            println("AutoCoverTest: ${File(command[0]).name} took ${(System.nanoTime() - started) / 1_000_000} ms")
+            return collected.toString()
         }
         run(ffmpeg.path, "-v", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=1", "-frames:v", "1", File(dir, "thumb.png").path)
         run(ffmpeg.path, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "libopus", File(dir, "a.webm").path)
@@ -140,7 +152,7 @@ class AutoCoverTest {
         )
         for (format in listOf(DownloadFormat.MP3, DownloadFormat.M4A, DownloadFormat.OPUS, DownloadFormat.FLAC)) {
             val out = File(dir, "out-${format.name}").apply { mkdirs() }
-            val command = listOf(ytDlp.path, "--enable-file-urls", "--ignore-config", "--no-warnings", "-o", "${out.path}/%(title)s.%(ext)s") +
+            val command = listOf(ytDlp.path, "--enable-file-urls", "--ignore-config", "--no-warnings", "--proxy", "", "--socket-timeout", "5", "--retries", "0", "-o", "${out.path}/%(title)s.%(ext)s") +
                 listOf("-x", "--audio-format", format.ytDlp) +
                 YtDlp.tidyArguments(format, embedThumbnail = true, cutNonMusic = false, ffmpeg = ffmpeg, windows = false) +
                 listOf("--load-info-json", File(dir, "info.json").path)
