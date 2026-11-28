@@ -1,5 +1,6 @@
 package com.exo.musicplayer.desktop
 
+import com.exo.musicplayer.data.net.Http
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.runtime.CompositionLocalProvider
@@ -97,6 +98,8 @@ import com.exo.musicplayer.desktop.system.Platform
  * animations and shadow.
  */
 fun main(args: Array<String>) {
+    // Before the first connection anywhere: the JDK reads its keep-alive pool size once.
+    Http.keepConnections()
     // Already running - perhaps out of sight in the tray: that one takes the
     // files and comes to the front, and this one goes.
     if (SingleInstance.handOver(args)) return
