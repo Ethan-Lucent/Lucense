@@ -84,6 +84,10 @@ fun FullscreenLyrics(controller: DesktopController) {
                 color = Palette.Stars,
                 spectrum = controller.engine.spectrum,
                 graph = controller.songGraph,
+                // The window that covers the screen and stays on top is the one being
+                // looked at, whether or not it has the keyboard: clicking another
+                // monitor or a notification taking focus froze the waves under the song.
+                pauseWhenUnfocused = false,
                 beat = controller.engine.beat,
                 reactiveMode = controller.reactiveMode,
                 modifier = Modifier.matchParentSize()
