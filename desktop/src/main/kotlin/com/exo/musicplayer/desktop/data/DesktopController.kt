@@ -41,6 +41,7 @@ import com.exo.musicplayer.data.lyrics.LyricsProviderChain
 import com.exo.musicplayer.data.lyrics.LyricsTerm
 import com.exo.musicplayer.data.lyrics.NeteaseLyricsProvider
 import com.exo.musicplayer.data.lyrics.tidyLyrics
+import com.exo.musicplayer.data.net.Http
 import com.exo.musicplayer.data.recognition.AudiusProvider
 import com.exo.musicplayer.data.recognition.DeezerProvider
 import com.exo.musicplayer.data.recognition.GeniusLyricSearch
@@ -2973,7 +2974,15 @@ class DesktopController(parent: CoroutineScope) {
                     )
                 }
             }
-            coverOf(match)?.let { Covers.fetchAndStore(track, it, writeTags) }
+            val matchCover = coverOf(match)?.let { Covers.fetchAndStore(track, it, writeTags) } == true
+            // The match came with no picture (YouTube results never do), or its
+            // link was dead: the same lookup a download gets, so identifying a
+            // song from YouTube doesn't leave it coverless. Asked for by hand,
+            // so it isn't held back by the setting or an earlier try.
+            if (!matchCover) {
+                val hint = CoverHint(query = listOfNotNull(match.artist, match.title).joinToString(" "))
+                autoCover.ensure(listOf(track.file), hint, force = true)
+            }
             io { store.mark(track.file.absolutePath, "identifiedAt") }
             // The tags are written either way; only the word about it is
             // dropped if the tab was left (and cleared) in the meantime.
@@ -3946,6 +3955,52 @@ class DesktopController(parent: CoroutineScope) {
     // Kept in Downloader: the download choices, yt-dlp and ffmpeg, and the
     // queue. These hand the UI's calls through to it.
 
+    /**
+     * Gives a song that has just landed (downloaded, or applied from a match)
+     * the cover it needs, the way the Covers bulk tool would: the same six
+     * services, the same writing into the file. It is told apart from the bulk
+     * tool by never running over the library, only over what is handed to it.
+     */
+    private val autoCover = AutoCover(
+        searcher = object : CoverSearcher {
+            override suspend fun search(track: DesktopTrack, hint: CoverHint?): CoverSearch {
+                val troubleBefore = Http.troubleCount
+                val started = System.nanoTime()
+                // WAV has no room for a cover: it is kept beside the song instead.
+                val embed = writeTags && track.file.extension.lowercase() != "wav"
+                suspend fun keep(url: String): Boolean =
+                    Covers.fetchAndStore(track, url, embed).also { stored ->
+                        // Kept because Discord needs an address, not a local file.
+                        if (stored) io { store.saveCoverUrl(track.file.absolutePath, url) }
+                    }
+
+                // The catalogue's own picture first, if the match came with one.
+                val own = hint?.artworkUrl?.takeIf { coverProviderOn(hint?.provider) }
+                var found = own != null && keep(own)
+                if (!found) {
+                    val query = hint?.query?.takeIf { it.isNotBlank() } ?: track.searchQuery
+                    found = coverLookup().findArtwork(query, giveUpMs = COVER_GIVE_UP_MS) { url ->
+                        keep(url).takeIf { it }
+                    } != null
+                }
+                val timedOut = (System.nanoTime() - started) / 1_000_000 >= COVER_GIVE_UP_MS
+                return AutoCoverRule.judge(found, troubleBefore, Http.troubleCount, timedOut)
+            }
+        },
+        ledger = object : CoverLedger {
+            override suspend fun hasArt(track: DesktopTrack) = io { Covers.hasOwnArt(track) }
+            // The same mark the Covers bulk tool leaves, so neither asks again.
+            override suspend fun tried(track: DesktopTrack) =
+                io { store.isMarked(track.file.absolutePath, BulkKind.COVERS.markColumn!!) }
+            override suspend fun markTried(track: DesktopTrack) =
+                io { store.mark(track.file.absolutePath, BulkKind.COVERS.markColumn!!) }
+        },
+        readTracks = { files -> FolderLibrary.readFiles(files) },
+        enabled = { downloadEmbedArt },
+        // The file changed under its row: the row is read again.
+        changed = { files -> addToLibrary(files) }
+    )
+
     private val downloader = Downloader(
         scope = scope,
         settings = settings,
@@ -3953,7 +4008,8 @@ class DesktopController(parent: CoroutineScope) {
         linkFinder = linkFinder,
         signIn = signIn,
         addToLibrary = { files -> addToLibrary(files) },
-        rescan = { rescan() }
+        rescan = { rescan() },
+        covers = autoCover
     )
 
     val tools: ToolStatus get() = downloader.tools
@@ -4856,6 +4912,9 @@ private fun List<DesktopTrack>.newestFirst(): List<DesktopTrack> =
 /** What to send a catalogue when looking a track up. */
 private val DesktopTrack.searchQuery: String
     get() = listOfNotNull(artist?.takeIf { it.isNotBlank() }, title).joinToString(" ")
+
+/** How long the cover services get to answer before a search gives up; as in the bulk tool. */
+private const val COVER_GIVE_UP_MS = 15_000L
 
 /** Steps in the accent's ease from one cover to the next, about 0.4 s. */
 private const val COVER_STEPS = 16
