@@ -82,12 +82,12 @@ jobs:
           python3 tools/verify-manifest.py out/*-manifest.json out/*.zip --image desktop/build/compose/binaries/main/app/Lucense
           (cd out && sha256sum -c SHA256SUMS)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lucense-linux
           path: out/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: test-reports
@@ -155,7 +155,7 @@ jobs:
           ls -la ~/.local/share/Lucense || true
           ls -la ~/.local/share/Lucense/tools || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: smoke-${{ matrix.os }}
