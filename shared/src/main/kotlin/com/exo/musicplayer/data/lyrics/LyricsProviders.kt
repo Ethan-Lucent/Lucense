@@ -3,12 +3,18 @@ package com.exo.musicplayer.data.lyrics
 import com.exo.musicplayer.data.net.Http
 import com.exo.musicplayer.data.net.HttpTally
 import kotlinx.coroutines.CancellationException
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
@@ -19,8 +25,12 @@ interface LyricsProvider {
     suspend fun fetch(title: String, artist: String?, album: String?, durationMs: Long): LyricsFetch
 }
 
+private val LYRIC_BRACKETS = Regex("""\(.*?\)|\[.*?]|【.*?】""")
+private val LYRIC_SPACES = Regex("""\s+""")
+private val LYRIC_ARTIST_SPLIT = Regex("""\s*(,|&|\bx\b|\bfeat\.?|\bft\.?)\s*""", RegexOption.IGNORE_CASE)
+
 /**
- * Tries each provider in turn until one returns lyrics.
+ * Asks the providers in order of preference; the first that has the lyrics wins.
  *
  * Ordered by what they give back, not by popularity: LRCLIB first because it is
  * the only one of the three that reliably carries *timed* LRC, then NetEase
@@ -28,24 +38,40 @@ interface LyricsProvider {
  * coverage. One service being down never blocks the rest, but it does stop the
  * answer from being "not found": only services that really answered can say
  * a song has no lyrics, and the bulk tool marks a song checked on that.
+ *
+ * The answer is decided exactly as if each service were asked in turn and
+ * waited for (see [fetch]), but the waiting overlaps: a service that hasn't
+ * answered within [hedgeMs] no longer holds the next one back, which is asked
+ * alongside it. Its answer still counts first if it has the lyrics; the ones
+ * after it are only used once everything ahead of them has come back empty, and
+ * are cancelled as soon as something ahead of them has the lyrics.
  */
-private val LYRIC_BRACKETS = Regex("""\(.*?\)|\[.*?]|【.*?】""")
-private val LYRIC_SPACES = Regex("""\s+""")
-private val LYRIC_ARTIST_SPLIT = Regex("""\s*(,|&|\bx\b|\bfeat\.?|\bft\.?)\s*""", RegexOption.IGNORE_CASE)
-
 class LyricsProviderChain(
     private val providers: List<LyricsProvider>,
     /** Whether the service by this name is to be asked; Settings can turn each off. */
     private val isOn: (String) -> Boolean = { true },
     /** How long one service gets to answer; a hung request must not hold the song forever. */
-    private val providerTimeoutMs: Long = PROVIDER_TIMEOUT_MS
+    private val providerTimeoutMs: Long = PROVIDER_TIMEOUT_MS,
+    /**
+     * How long a service is waited for before the next one is asked alongside it.
+     * [Long.MAX_VALUE] asks them strictly one after another.
+     */
+    private val hedgeMs: Long = HEDGE_MS,
+    /** At most this many services out at once for one song (the one the answer waits on always goes). */
+    private val maxInFlight: Int = MAX_IN_FLIGHT,
+    /** Skips a service that keeps failing; null asks every time. */
+    private val breaker: ProviderBreaker? = ProviderBreaker(),
+    /** Keeps each service to a polite request rate across all songs; null doesn't pace. */
+    private val pacer: ProviderPacer? = ProviderPacer(),
+    /** Where the services' requests run; tests hand in a virtual-time dispatcher. */
+    callContext: CoroutineContext = Dispatchers.IO
 ) {
     /**
      * Where each service's lookup runs. Not the caller's scope: the services
      * block in plain socket reads that a timeout can't interrupt, so a service
      * that is given up on finishes (or fails) on its own, and its answer is dropped.
      */
-    private val calls = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val calls = CoroutineScope(SupervisorJob() + callContext)
 
     /** What the services are called, in the order they are asked. */
     val labels: List<String> get() = providers.map { it.label }
@@ -54,12 +80,22 @@ class LyricsProviderChain(
      * Looks the song up as named, then by pieces of its name when that finds
      * nothing: downloaded files are often called "Artist - Song (Official
      * Video) [Channel]" or credit "A, B x C", which no lyrics service knows.
+     *
+     * Every (spelling, service) pair is one cell, in the order the old one-at-a-
+     * time lookup asked them: spelling by spelling, service by service. The
+     * decision below is that lookup, word for word, except that it reads each
+     * cell's answer from [Cells] instead of asking then; [Cells] has usually
+     * started it already. So the same answer comes out, never later.
+     *
+     * [memo], given by a bulk run, answers a song that was already looked up under
+     * the same name in that run (a library holding a song twice).
      */
     suspend fun fetch(
         title: String,
         artist: String?,
         album: String?,
-        durationMs: Long
+        durationMs: Long,
+        memo: LyricsRunMemo? = null
     ): Pair<LyricsFetch, String?> {
         val enabled = providers.filter { isOn(it.label) }
         if (enabled.isEmpty()) {
@@ -67,9 +103,26 @@ class LyricsProviderChain(
         }
         val pieces = segments(title, artist)
         if (pieces.isEmpty()) return LyricsFetch.NotFound to null
+        val key = memo?.let { LyricsRunMemo.key(title, artist, album, durationMs, enabled.map { it.label }) }
+        if (memo != null && key != null) memo.get(key)?.let { return it }
+        val answer = coroutineScope {
+            val cells = Cells(this, pieces, enabled, album, durationMs)
+            try {
+                decide(cells, pieces.size, enabled)
+            } finally {
+                // Decided (or stopped): nothing still out is wanted.
+                coroutineContext.cancelChildren()
+            }
+        }
+        if (memo != null && key != null) memo.put(key, answer)
+        return answer
+    }
+
+    /** The one-at-a-time lookup's rules, reading answers from [cells]. */
+    private suspend fun decide(cells: Cells, spellings: Int, enabled: List<LyricsProvider>): Pair<LyricsFetch, String?> {
         val round = Round()
-        for ((pieceTitle, pieceArtist) in pieces) {
-            val result = fetchOnce(enabled, round, pieceTitle, pieceArtist, album, durationMs)
+        for (spelling in 0 until spellings) {
+            val result = decideOnce(cells, spelling, enabled, round)
             if (result.first is LyricsFetch.Found || result.first is LyricsFetch.Instrumental) return result
             // Nobody answered at all: other spellings of the name won't reach them either.
             if (!round.anyAnswered) break
@@ -86,12 +139,139 @@ class LyricsProviderChain(
         }
     }
 
+    private suspend fun decideOnce(
+        cells: Cells,
+        spelling: Int,
+        enabled: List<LyricsProvider>,
+        round: Round
+    ): Pair<LyricsFetch, String?> {
+        var sawInstrumental = false
+        for ((index, provider) in enabled.withIndex()) {
+            if (provider.label in round.down) continue
+            when (val result = cells.answer(spelling * enabled.size + index)) {
+                is LyricsFetch.Found -> return result.tidied() to provider.label
+                is LyricsFetch.Instrumental -> { round.anyAnswered = true; sawInstrumental = true }
+                is LyricsFetch.NotFound -> round.anyAnswered = true
+                is LyricsFetch.Error -> { round.down += provider.label; round.lastError = result.message }
+            }
+        }
+        return (if (sawInstrumental) LyricsFetch.Instrumental else LyricsFetch.NotFound) to null
+    }
+
     /** What one song's lookup has learnt so far, across the spellings of its name. */
     private class Round {
         var anyAnswered = false
         /** Services that failed once: not asked again for this song, and "not found" is off the table. */
         val down = linkedSetOf<String>()
         var lastError: String? = null
+    }
+
+    /**
+     * One song's cells, started ahead of need. Cell i is started when the
+     * decision needs it, or when cell i-1 (in order) has been out for [hedgeMs]
+     * without answering, or has answered without lyrics (at most [maxInFlight]
+     * out ahead of need). Cells that can no longer matter are not started, and
+     * cancelled if they were: everything after a cell that found lyrics (the
+     * decision stops there or earlier), and a service's later spellings once it
+     * failed (the decision skips a service that failed).
+     */
+    private inner class Cells(
+        private val scope: CoroutineScope,
+        private val pieces: List<Pair<String, String?>>,
+        private val enabled: List<LyricsProvider>,
+        private val album: String?,
+        private val durationMs: Long
+    ) {
+        private val size = pieces.size * enabled.size
+        private val jobs = arrayOfNulls<Deferred<LyricsFetch>>(size)
+        private val results = arrayOfNulls<LyricsFetch>(size)
+        private var out = 0
+        /** The first cell whose lyrics the decision is sure to reach: nothing after it matters. */
+        private var foundAt = Int.MAX_VALUE
+        /** The first spelling each service failed on. */
+        private val failedAt = HashMap<String, Int>()
+
+        private fun spellingOf(i: Int) = i / enabled.size
+        private fun providerOf(i: Int) = enabled[i % enabled.size]
+
+        private fun pointless(i: Int): Boolean =
+            i > foundAt || (failedAt[providerOf(i).label]?.let { it < spellingOf(i) } == true)
+
+        /**
+         * Whether the decision will stop at cell [i] if it gets that far: it has
+         * lyrics, and its service answered every earlier spelling (one that failed
+         * would make the decision skip this service, and so this cell).
+         */
+        private fun decisive(i: Int): Boolean {
+            if (results[i] !is LyricsFetch.Found) return false
+            val column = i % enabled.size
+            return (0 until spellingOf(i)).all { s ->
+                val earlier = results[s * enabled.size + column]
+                earlier != null && earlier !is LyricsFetch.Error
+            }
+        }
+
+        suspend fun answer(i: Int): LyricsFetch = synchronized(this) { jobs[i] ?: start(i) }.await()
+
+        /** Called holding the lock. */
+        private fun start(i: Int): Deferred<LyricsFetch> {
+            out++
+            val (title, artist) = pieces[spellingOf(i)]
+            val provider = providerOf(i)
+            val job = scope.async {
+                var settled = false
+                try {
+                    val result = ask(provider, title, artist, album, durationMs)
+                    settled = true
+                    settled(i, result)
+                    result
+                } finally {
+                    // Cancelled or failed on the way: no longer out, and nothing to settle.
+                    if (!settled) synchronized(this@Cells) { out-- }
+                }
+            }
+            jobs[i] = job
+            if (hedgeMs != Long.MAX_VALUE && i + 1 < size) {
+                scope.launch {
+                    delay(hedgeMs)
+                    if (!job.isCompleted) hedge(i)
+                }
+            }
+            return job
+        }
+
+        /** Cell [after] is slow: the next one that can still matter goes out alongside it. */
+        private fun hedge(after: Int) {
+            synchronized(this) {
+                if (out >= maxInFlight) return
+                val next = (after + 1 until size).firstOrNull { jobs[it] == null && !pointless(it) } ?: return
+                start(next)
+            }
+        }
+
+        private fun settled(i: Int, result: LyricsFetch) {
+            synchronized(this) {
+                out--
+                results[i] = result
+                if (result is LyricsFetch.Error) {
+                    val label = providerOf(i).label
+                    val spelling = spellingOf(i)
+                    if (spelling < (failedAt[label] ?: Int.MAX_VALUE)) {
+                        failedAt[label] = spelling
+                        // The decision skips this service from here on.
+                        for (j in i + enabled.size until size step enabled.size) jobs[j]?.cancel()
+                    }
+                }
+                // A cell with lyrics can become sure only now, when an earlier spelling on its service answered.
+                val before = foundAt
+                foundAt = (0 until minOf(before, size)).firstOrNull(::decisive) ?: before
+                if (foundAt < before) for (j in foundAt + 1 until size) jobs[j]?.cancel()
+            }
+            // Answered without lyrics: the next one goes now, as it would have one at a time.
+            // Without this, a quick answer ahead of a slow one let nothing else start
+            // until the slow one was done.
+            if (result !is LyricsFetch.Found && hedgeMs != Long.MAX_VALUE) hedge(i)
+        }
     }
 
     /** The name as given, then without brackets, split at " - ", and by the first artist alone. */
@@ -109,31 +289,13 @@ class LyricsProviderChain(
         ).filter { it.first.isNotBlank() }.distinct()
     }
 
-    private suspend fun fetchOnce(
-        enabled: List<LyricsProvider>,
-        round: Round,
-        title: String,
-        artist: String?,
-        album: String?,
-        durationMs: Long
-    ): Pair<LyricsFetch, String?> {
-        var sawInstrumental = false
-        for (provider in enabled) {
-            if (provider.label in round.down) continue
-            when (val result = ask(provider, title, artist, album, durationMs)) {
-                is LyricsFetch.Found -> return result.tidied() to provider.label
-                is LyricsFetch.Instrumental -> { round.anyAnswered = true; sawInstrumental = true }
-                is LyricsFetch.NotFound -> round.anyAnswered = true
-                is LyricsFetch.Error -> { round.down += provider.label; round.lastError = result.message }
-            }
-        }
-        return (if (sawInstrumental) LyricsFetch.Instrumental else LyricsFetch.NotFound) to null
-    }
-
     /**
      * One service's answer, with its failures said out loud. Most services say
      * NotFound when their request failed; the [HttpTally] catches that, and a
      * service that throws or takes longer than [providerTimeoutMs] is an Error.
+     *
+     * A service the [breaker] is skipping is an Error at once. The [pacer]'s wait
+     * for this service's turn (a free place, its spacing) comes before its timeout starts.
      */
     private suspend fun ask(
         provider: LyricsProvider,
@@ -142,30 +304,72 @@ class LyricsProviderChain(
         album: String?,
         durationMs: Long
     ): LyricsFetch {
+        val label = provider.label
+        breaker?.skippedFor(label)?.let { left ->
+            return LyricsFetch.Error("$label is temporarily skipped after failing repeatedly (${(left + 999) / 1000} s more).")
+        }
+        val answer = if (pacer == null) {
+            call(provider, title, artist, album, durationMs)
+        } else {
+            pacer.withTurn(label, providerTimeoutMs) { call(provider, title, artist, album, durationMs) }
+                // Not a failure of the service's, so the breaker doesn't hear of it.
+                ?: return LyricsFetch.Error("$label asked for fewer requests; it is left alone for a while.")
+        }
+        breaker?.record(label, failed = answer is LyricsFetch.Error)
+        return answer
+    }
+
+    /** The asking itself: within [providerTimeoutMs], its requests counted, its 429s passed to the [pacer]. */
+    private suspend fun call(
+        provider: LyricsProvider,
+        title: String,
+        artist: String?,
+        album: String?,
+        durationMs: Long
+    ): LyricsFetch {
+        val label = provider.label
         val tally = HttpTally()
         val call = calls.async(Http.counting(tally)) { provider.fetch(title, artist, album, durationMs) }
         val result = try {
             withTimeoutOrNull(providerTimeoutMs) { call.await() }
-                ?: LyricsFetch.Error("${provider.label} took too long to answer.")
+                ?: LyricsFetch.Error("$label took too long to answer.")
         } catch (cancelled: CancellationException) {
             // Stopping the run is not a failed service: caught as one, a cancelled
             // lookup was recorded as checked when it never had been.
             currentCoroutineContext().ensureActive()
-            LyricsFetch.Error("${provider.label} gave up.")
+            LyricsFetch.Error("$label gave up.")
         } catch (failure: Throwable) {
-            LyricsFetch.Error("${provider.label} failed: ${failure.message ?: failure.javaClass.simpleName}")
+            LyricsFetch.Error("$label failed: ${failure.message ?: failure.javaClass.simpleName}")
         } finally {
             call.cancel()
+            // Its sockets are closed too: a timed-out or unwanted request stops reading now.
+            tally.abandon()
         }
+        if (tally.slowDownMs >= 0) pacer?.slowDown(label, tally.slowDownMs)
         return if (result is LyricsFetch.NotFound && tally.failed > 0) {
-            LyricsFetch.Error("Couldn't reach ${provider.label}.")
+            LyricsFetch.Error("Couldn't reach $label.")
         } else {
             result
         }
     }
 
-    private companion object {
+    companion object {
         const val PROVIDER_TIMEOUT_MS = 12_000L
+
+        /**
+         * Through a SOCKS5 proxy with connections kept, an LRCLIB lookup took a
+         * median 0.74 s (p90 1.2 s): one that takes longer than this is probably
+         * a miss or a stall, and the next service is worth asking alongside.
+         */
+        const val HEDGE_MS = 800L
+
+        /**
+         * One song never has more than this many cells out at once ahead of need.
+         * Modelled on the measured latencies, 6 makes a song that needs every
+         * spelling about 2.3x quicker than one at a time for ~4% more requests;
+         * past 6 it buys little and asks more.
+         */
+        const val MAX_IN_FLIGHT = 6
     }
 }
 

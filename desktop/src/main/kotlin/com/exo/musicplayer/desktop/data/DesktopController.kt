@@ -39,6 +39,7 @@ import com.exo.musicplayer.data.lyrics.LrcLibProvider
 import com.exo.musicplayer.data.lyrics.LyricsFetch
 import com.exo.musicplayer.data.lyrics.LyricsOvhProvider
 import com.exo.musicplayer.data.lyrics.LyricsProviderChain
+import com.exo.musicplayer.data.lyrics.LyricsRunMemo
 import com.exo.musicplayer.data.lyrics.LyricsTerm
 import com.exo.musicplayer.data.lyrics.NeteaseLyricsProvider
 import com.exo.musicplayer.data.lyrics.tidyLyrics
@@ -3227,10 +3228,17 @@ class DesktopController(parent: CoroutineScope) {
 
             // Identifying decodes audio, so it stays one at a time. Only a song that got
             // an answer is marked (workThroughQueue): a failed lookup is tried again next run.
+            // Lyrics pace each service on its own (the chain's ProviderPacer), so more songs
+            // go at once and no worker rests between them.
+            val memo = LyricsRunMemo()
             val tally = workThrough(
                 queue,
-                workers = if (kind == BulkKind.IDENTIFY) 1 else SONGS_AT_ONCE,
-                paceMs = if (kind in ONLINE) BULK_PACE_MS else 0L,
+                workers = when (kind) {
+                    BulkKind.IDENTIFY -> 1
+                    BulkKind.LYRICS -> LYRICS_AT_ONCE
+                    else -> SONGS_AT_ONCE
+                },
+                paceMs = if (kind in ONLINE && kind != BulkKind.LYRICS) BULK_PACE_MS else 0L,
                 afterEach = { track ->
                     if (column != null) io { store.mark(track.file.absolutePath, column) }
                 }
@@ -3238,7 +3246,7 @@ class DesktopController(parent: CoroutineScope) {
                 when (kind) {
                     BulkKind.COVERS -> bulkCover(track)
                     BulkKind.TAGS -> bulkTags(track, names, tags)
-                    BulkKind.LYRICS -> bulkLyrics(track)
+                    BulkKind.LYRICS -> bulkLyrics(track, memo = memo)
                     BulkKind.IDENTIFY -> bulkIdentify(track)
                     BulkKind.REPAIR -> bulkRepair(track)
                     BulkKind.LEVELS -> bulkLevel(track)
@@ -3691,10 +3699,14 @@ class DesktopController(parent: CoroutineScope) {
      * alone unless [keepStored] is off, which Fix does: picking a song out is
      * the instruction to look again.
      */
-    private suspend fun bulkLyrics(track: DesktopTrack, keepStored: Boolean = true): BulkOutcome {
+    private suspend fun bulkLyrics(
+        track: DesktopTrack,
+        keepStored: Boolean = true,
+        memo: LyricsRunMemo? = null
+    ): BulkOutcome {
         val (title, artist) = lyricsQueryFor(track)
         return lyricsStep(
-            lyricsChain, store, track.file.absolutePath, title, artist, track.album, track.durationMs, keepStored
+            lyricsChain, store, track.file.absolutePath, title, artist, track.album, track.durationMs, keepStored, memo
         )
     }
 
@@ -5122,6 +5134,13 @@ private const val SONGS_AT_ONCE = 5
 
 /** A breath between one worker's songs for the tools that ask online services, so they aren't hammered. */
 private const val BULK_PACE_MS = 250L
+
+/**
+ * How many songs the Lyrics tool looks up at once. Each one mostly waits on the
+ * network, and every service is held to its own request rate whatever this is,
+ * so more in flight is faster without asking any service harder than its pacing.
+ */
+private const val LYRICS_AT_ONCE = 10
 
 /** The tools that ask services online. */
 private val ONLINE = setOf(BulkKind.COVERS, BulkKind.TAGS, BulkKind.LYRICS, BulkKind.IDENTIFY)

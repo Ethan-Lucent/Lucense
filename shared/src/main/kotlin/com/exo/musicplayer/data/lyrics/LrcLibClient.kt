@@ -6,8 +6,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /** What a lyrics lookup returned. */
 sealed interface LyricsFetch {
@@ -119,24 +117,18 @@ class LrcLibClient {
         data class Failed(val message: String) : Response
     }
 
+    /**
+     * Through [Http.exchange], so the connection is kept for the next song (LRCLIB is
+     * asked first for every song) and a 429's Retry-After reaches the chain's pacing.
+     */
     private fun request(url: String): Response = try {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 20_000
-            setRequestProperty("User-Agent", USER_AGENT)
-        }
-        try {
-            when (val code = connection.responseCode) {
-                in 200..299 ->
-                    Response.Ok(connection.inputStream.bufferedReader().use { it.readText() })
-                404 -> Response.NotFound
-                // A refusal that will be the same next time is an answer; "try later" is not.
-                in 400..499 -> if (Http.isAnswer(code)) Response.NotFound else Response.Failed("LRCLIB returned HTTP $code.")
-                else -> Response.Failed("LRCLIB returned HTTP $code.")
-            }
-        } finally {
-            connection.disconnect()
+        val reply = Http.exchange(url, "GET", emptyMap(), null, null, USER_AGENT, LIMITS)
+        when (val code = reply.code) {
+            in 200..299 -> Response.Ok(reply.body.orEmpty())
+            404 -> Response.NotFound
+            // A refusal that will be the same next time is an answer; "try later" is not.
+            in 400..499 -> if (Http.isAnswer(code)) Response.NotFound else Response.Failed("LRCLIB returned HTTP $code.")
+            else -> Response.Failed("LRCLIB returned HTTP $code.")
         }
     } catch (t: Throwable) {
         Log.warn(TAG, "Lyrics request failed", t)
@@ -146,6 +138,8 @@ class LrcLibClient {
     private companion object {
         const val TAG = "LrcLibClient"
         const val USER_AGENT = "Lucense/1.6 (Android music player)"
+        /** A short connect (a dead host costs seconds), the long read it always had. */
+        val LIMITS = Http.Limits(connectMs = Http.CONNECT_TIMEOUT_MS, readMs = 20_000)
     }
 }
 
