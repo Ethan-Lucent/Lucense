@@ -215,6 +215,54 @@ class DesktopStore(databaseFile: File) {
                 )
                 """.trimIndent()
             )
+            // Things done to the database once, by name, so they are never done twice.
+            st.executeUpdate("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        }
+        once(FALSE_MARKS_CLEARED) { forgetFalseMarks() }
+    }
+
+    /**
+     * Runs [block] the first time this database sees [key], and never again.
+     * The work and the record of it go in one transaction, so a crash between
+     * them can't leave it done but unrecorded.
+     */
+    internal fun once(key: String, block: () -> Unit) = synchronized(connection) {
+        val seen = connection.prepareStatement("SELECT 1 FROM meta WHERE key = ?").use { ps ->
+            ps.setString(1, key)
+            ps.executeQuery().use { it.next() }
+        }
+        if (seen) return@synchronized
+        connection.autoCommit = false
+        try {
+            block()
+            connection.prepareStatement("INSERT INTO meta(key, value) VALUES (?, ?)").use { ps ->
+                ps.setString(1, key); ps.setString(2, System.currentTimeMillis().toString()); ps.executeUpdate()
+            }
+            connection.commit()
+        } catch (failure: Exception) {
+            connection.rollback()
+            throw failure
+        } finally {
+            connection.autoCommit = true
+        }
+    }
+
+    /**
+     * Until now Lyrics and Covers marked every song they visited, including
+     * those whose lookup failed because there was no connection, so a first run
+     * made offline left the whole library "checked" and every later run did
+     * nothing. A lyrics mark on a song with no lyrics, or any cover mark, can't
+     * be told apart from such a failure, so they are dropped and those songs are
+     * looked at once more. A song that has art is passed over at once, and from
+     * now on only a real answer marks a song.
+     */
+    private fun forgetFalseMarks() {
+        connection.createStatement().use { st ->
+            st.executeUpdate(
+                "UPDATE marks SET lyricsCheckedAt = NULL WHERE lyricsCheckedAt IS NOT NULL " +
+                    "AND path NOT IN (SELECT path FROM lyrics)"
+            )
+            st.executeUpdate("UPDATE marks SET artCheckedAt = NULL WHERE artCheckedAt IS NOT NULL")
         }
     }
 
@@ -880,6 +928,9 @@ class DesktopStore(databaseFile: File) {
         val MARK_COLUMNS = setOf(
             "artCheckedAt", "identifiedAt", "lyricsCheckedAt", "fingerprintedAt"
         )
+
+        /** [once]'s key for [forgetFalseMarks]. */
+        internal const val FALSE_MARKS_CLEARED = "bulk-false-marks-cleared"
 
         fun pathKey(path: String): Long = path.hashCode().toLong() and 0xFFFFFFFFL
     }

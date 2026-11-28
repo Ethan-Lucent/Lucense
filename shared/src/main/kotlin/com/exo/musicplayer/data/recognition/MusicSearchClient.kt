@@ -1,5 +1,6 @@
 package com.exo.musicplayer.data.recognition
 
+import com.exo.musicplayer.data.net.Http
 import com.exo.musicplayer.data.net.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,7 +31,11 @@ class MusicSearchClient {
                 readTimeout = 20_000
                 requestMethod = "GET"
             }
+            var answered = false
             try {
+                // Counted like Http's own requests, so a bulk run can tell offline from "nothing".
+                Http.noteAnswer(connection.responseCode)
+                answered = true
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                     return@withContext RecognitionResult.Error(
                         "Search failed (HTTP ${connection.responseCode})."
@@ -46,6 +51,7 @@ class MusicSearchClient {
                 if (matches.isEmpty()) RecognitionResult.NoMatch
                 else RecognitionResult.Found(matches)
             } catch (t: Throwable) {
+                if (!answered) Http.noteUnreachable()
                 Log.warn(TAG, "Search failed", t)
                 RecognitionResult.Error(t.message ?: "Search failed.")
             } finally {
