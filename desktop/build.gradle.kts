@@ -1,4 +1,11 @@
+import java.io.IOException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFilePermission
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
@@ -344,5 +351,139 @@ listOf("", "Release").forEach { variant ->
             // icon. jpackage takes --icon fine alongside --app-image.
             freeArgs.addAll("--icon", project.layout.projectDirectory.file("icons/lucense.png").asFile.absolutePath)
         }
+    }
+}
+
+// ---- Release files for in-app updates --------------------------------------
+//
+// The updater downloads only the files that changed. To do that it needs, for
+// each release and platform, a manifest naming every file of the app image with
+// its hash, and a zip of that same image whose entries it can fetch one by one
+// (HTTP range requests on the central directory and then on single entries).
+// Both come from the app image that createDistributable leaves behind, so the
+// class archive made there is in both. See docs/UPDATES.md.
+
+/** The platform name used in release file names, or a clear failure on anything else. */
+fun releasePlatform(): String {
+    val os = System.getProperty("os.name").lowercase()
+    val arch = System.getProperty("os.arch").lowercase()
+    if (arch != "amd64" && arch != "x86_64") {
+        throw GradleException("Release files are only made for x64 machines; this one is '$arch'.")
+    }
+    return when {
+        os.contains("linux") -> "linux-x64"
+        os.contains("windows") -> "windows-x64"
+        else -> throw GradleException("Release files are only made on Linux or Windows; this is '${System.getProperty("os.name")}'.")
+    }
+}
+
+/** Writes Lucense-<version>-<platform>-manifest.json: every regular file of the app image, hashed. */
+abstract class AppManifest : DefaultTask() {
+    /** The app image folder (the one holding Lucense.exe or bin/Lucense): the install root. */
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val image: DirectoryProperty
+
+    @get:Input
+    abstract val version: Property<String>
+
+    /** Read lazily, so a machine that can't make a manifest only fails when asked for one. */
+    @get:Input
+    abstract val platform: Property<String>
+
+    @get:OutputFile
+    abstract val manifest: RegularFileProperty
+
+    @TaskAction
+    fun write() {
+        val root = image.get().asFile.toPath()
+        val platformName = platform.get()
+        val versionName = version.get()
+        class Entry(val path: String, val file: Path, val size: Long, val exec: Boolean)
+        val entries = ArrayList<Entry>()
+        var skipped = 0
+        Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                // Symlinks and other oddities are not listed: the updater only deals in regular files.
+                if (!attrs.isRegularFile) {
+                    skipped++
+                    logger.warn("Not listed (not a regular file): ${root.relativize(file)}")
+                    return FileVisitResult.CONTINUE
+                }
+                val exec = platformName == "linux-x64" &&
+                    PosixFilePermission.OWNER_EXECUTE in Files.getPosixFilePermissions(file)
+                entries += Entry(root.relativize(file).joinToString("/"), file, attrs.size(), exec)
+                return FileVisitResult.CONTINUE
+            }
+            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult = throw exc
+        })
+        // Plain character order, so the same image always gives the same manifest.
+        entries.sortBy { it.path }
+
+        fun quoted(text: String): String {
+            val out = StringBuilder("\"")
+            for (c in text) when {
+                c == '"' -> out.append("\\\"")
+                c == '\\' -> out.append("\\\\")
+                c < ' ' -> out.append("\\u%04x".format(c.code))
+                else -> out.append(c)
+            }
+            return out.append('"').toString()
+        }
+
+        val buffer = ByteArray(1 shl 20)
+        val target = manifest.get().asFile
+        target.parentFile.mkdirs()
+        target.bufferedWriter(Charsets.UTF_8).use { json ->
+            json.write("{\"version\":${quoted(versionName)},\"platform\":${quoted(platformName)},")
+            json.write("\"zip\":${quoted("Lucense-$versionName-$platformName.zip")},\"prefix\":\"Lucense/\",\n\"files\":[\n")
+            entries.forEachIndexed { index, entry ->
+                // Streamed: the bundled ffmpeg alone is 179 MB.
+                val digest = MessageDigest.getInstance("SHA-256")
+                Files.newInputStream(entry.file).use { input ->
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        digest.update(buffer, 0, n)
+                    }
+                }
+                val sha = digest.digest().joinToString("") { "%02x".format(it) }
+                json.write("{\"path\":${quoted(entry.path)},\"size\":${entry.size},\"sha256\":\"$sha\",\"exec\":${entry.exec}}")
+                json.write(if (index < entries.size - 1) ",\n" else "\n")
+            }
+            json.write("]}\n")
+        }
+        logger.lifecycle("${target.name}: ${entries.size} files" + if (skipped > 0) ", $skipped not listed" else "")
+    }
+}
+
+tasks.register<AppManifest>("appManifest") {
+    description = "Writes the per-file manifest of the app image that the in-app updater reads."
+    group = "distribution"
+    dependsOn("createDistributable")
+    image.set(layout.buildDirectory.dir("compose/binaries/main/app/Lucense"))
+    version.set(lucenseVersion)
+    platform.set(providers.provider { releasePlatform() })
+    manifest.set(layout.buildDirectory.file(platform.map { "release/Lucense-$lucenseVersion-$it-manifest.json" }))
+}
+
+// The zip the updater reads single files out of. Gradle's Zip deflates every
+// file as an entry of its own and keeps the files' permissions (the exec bits).
+// On Windows the zip is made by the workflow (Compress-Archive), so there is no task.
+if (buildingOnLinux) {
+    tasks.register<Zip>("appZip") {
+        description = "Zips the app image as Lucense-<version>-linux-x64.zip, one entry per file under Lucense/."
+        group = "distribution"
+        dependsOn("createDistributable")
+        archiveFileName.set("Lucense-$lucenseVersion-linux-x64.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("release"))
+        entryCompression = ZipEntryCompression.DEFLATED
+        // Same image, same bytes: no timestamps, a fixed order.
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+        from(layout.buildDirectory.dir("compose/binaries/main/app/Lucense")) { into("Lucense") }
+        // Files only, as the manifest lists them: no entries for folders.
+        // No entries for empty folders. (Folders that hold files still get one, which readers ignore.)
+        includeEmptyDirs = false
     }
 }
