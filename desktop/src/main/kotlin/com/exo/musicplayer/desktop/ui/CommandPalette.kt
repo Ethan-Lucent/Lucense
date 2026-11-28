@@ -543,6 +543,10 @@ private fun paletteActions(
         PaletteItem(a, "Back up now", "Settings: About lists the backups", Icons.Default.Save, words = "backup") {
             controller.backUpNow()
             onSettings(SettingsTab.ABOUT)
+        },
+        PaletteItem(a, "Check for updates", "Settings: About shows what is new", Icons.Default.Refresh, words = "update upgrade new version") {
+            controller.checkForUpdate()
+            onSettings(SettingsTab.ABOUT)
         }
     )
     // Where the mouse's Back and Forward go, listed only when there is somewhere to go.

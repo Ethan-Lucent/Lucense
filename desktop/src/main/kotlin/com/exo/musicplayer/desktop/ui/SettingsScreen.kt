@@ -1007,17 +1007,7 @@ private fun AboutSettings(controller: DesktopController) {
             GhostButton("Riff on GitHub") { openLink("https://github.com/rootscripts/riff") }
         }
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Updates", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
-                Hint(controller.updateNote ?: "Looked up when Lucense starts.")
-            }
-            controller.update?.takeIf { controller.updateReady }?.let { release ->
-                AccentButton("Get ${release.version}") { openLink(release.url) }
-                Spacer(Modifier.width(8.dp))
-            }
-            GhostButton("Check now", enabled = !controller.updateChecking) { controller.checkForUpdate() }
-        }
+        UpdateRow(controller, ::openLink)
         Spacer(Modifier.height(16.dp))
         Text("Backups", style = MaterialTheme.typography.bodyMedium, color = Palette.Text)
         Spacer(Modifier.height(4.dp))
